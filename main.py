@@ -24,51 +24,6 @@ from skimage.metrics import structural_similarity as ssim
 from numpy.polynomial.chebyshev import chebval
 from scipy.interpolate import RectBivariateSpline
 
-def fit_bilinear_plane(lut_region, r_norm, c_norm):
-    """Fit bilinear plane a + b*r + c*c to region data"""
-    r_region = r_norm[:, None]
-    c_region = c_norm[None, :]
-    X = np.ones((r_region.shape[0] * c_region.shape[1], 3))
-    X[:, 1] = r_region.ravel()
-    X[:, 2] = c_region.ravel()
-    y = lut_region.ravel()
-    coeffs, _, _, _ = np.linalg.lstsq(X, y, rcond=None)
-    return coeffs  # [a, b, c]
-
-def evaluate_region(r_eval, c_eval, region):
-    """Evaluate bilinear plane for a region"""
-    i_min, i_max, j_min, j_max, a, b, c = region
-    # Normalize r_eval and c_eval to region center or something? No, for analytical continuity, perhaps not.
-    # For simplicity, use global r_norm, c_norm scaled.
-    return a + b * r_eval + c * c_eval
-
-def build_quadtree(lut, i0, i1, j0, j1, max_depth, mse_threshold, r_norm, c_norm):
-    """Recursive quadtree partitioning with bilinear fits"""
-    lut_region = lut[i0:i1, j0:j1]
-    r_region = r_norm[i0:i1]
-    c_region = c_norm[j0:j1]
-    coeffs = fit_bilinear_plane(lut_region, r_region, c_region)
-    a, b, c = coeffs
-
-    # Compute mse for region
-    r_pred, c_pred = np.meshgrid(r_region, c_region, indexing='ij')
-    predicted = a + b * r_pred + c * c_pred
-    mse_local = np.mean((lut_region - predicted)**2)
-
-    # Subdivide if needed
-    if (i1 - i0 > 4 and j1 - j0 > 4) and mse_local > mse_threshold and max_depth > 0:
-        mid_i = (i0 + i1) // 2
-        mid_j = (j0 + j1) // 2
-        quadtree_regions = []
-        for ii0, ii1 in [(i0, mid_i), (mid_i, i1)]:
-            for jj0, jj1 in [(j0, mid_j), (mid_j, j1)]:
-                quadtree_regions.extend(build_quadtree(lut, ii0, ii1, jj0, jj1, max_depth-1, mse_threshold, r_norm, c_norm))
-        return quadtree_regions
-
-    else:
-        # Leaf, return region with coeffs
-        return [(i0, i1, j0, j1, a, b, c)]
-
 def main():
     # Load data
     with open("thirdparty/sheen_lut_data.txt", "r") as f:
