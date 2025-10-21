@@ -28,7 +28,7 @@ Derivative of a degree 8 polynomial (45 terms) fitted using least squares, provi
 
 Where:
 - `r`: Normalized roughness (0 to 1)
-- `cos_theta`: Cosine of the angle (likely between normal and view vector)
+- `cos_theta`: NdotV (cosine of the viewing angle)
 
 Mean Squared Error: 0.000967 (under 0.001 threshold for shader performance)
 
