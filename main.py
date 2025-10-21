@@ -19,6 +19,7 @@
 
 import numpy as np
 import sympy
+import matplotlib.pyplot as plt
 
 def main():
     # Load data
@@ -31,10 +32,11 @@ def main():
 
     # Reshape to 128x128
     lut = np.array(data).reshape(128, 128)
+    print(f"Original LUT range: min={np.min(lut):.4f}, max={np.max(lut):.4f}")
 
-    # Normalized coordinates
-    r = np.linspace(0, 1, 128)  # roughness perhaps
-    c = np.linspace(0, 1, 128)  # cos_theta or something
+    # Raw array indices
+    r = np.arange(128)  # roughness indices 0-127
+    c = np.arange(128)  # cos_theta indices 0-127
 
     # Fit 2D polynomial of degree 4 for improved fit under 0.001 MSE
     deg = 4
@@ -61,13 +63,37 @@ def main():
     # Build the expression
     expr = sum(coeffs[k] * x**i * y**j for k, (i, j) in enumerate(terms))
 
-    print("Approximated analytical expression for the sheen LUT:")
-    print(sympy.simplify(expr))
-
     # Optional: check the fit quality
     lut_approx = np.dot(X, coeffs).reshape(128, 128)
+    print(f"Approximated LUT range: min={np.min(lut_approx):.4f}, max={np.max(lut_approx):.4f}")
     mse = np.mean((lut - lut_approx)**2)
+    print("Approximated analytical expression for the sheen LUT:")
+    print(sympy.simplify(expr))
     print(f"Mean Squared Error: {mse}")
+
+    # Clip negative values in approximation for visualization (as sheen values can't be negative)
+    lut_display = lut
+    lut_approx_display = np.clip(lut_approx, 0, None)
+
+    # Use percentile scaling for better contrast and visibility (shared across both images)
+    vmin = np.percentile(lut_display, 5)
+    vmax = np.percentile(lut_display, 95)
+
+    print(f"Display range (5th to 95th percentile): vmin={vmin:.4f}, vmax={vmax:.4f}")
+
+    plt.figure()
+    plt.imshow(lut_display, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
+    plt.axis('off')
+    plt.savefig('original_lut.png', dpi=300, bbox_inches='tight')
+    plt.close()
+
+    plt.figure()
+    plt.imshow(lut_approx_display, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
+    plt.axis('off')
+    plt.savefig('approximated_lut.png', dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print("Images saved as original_lut.png and approximated_lut.png")
 
 if __name__ == "__main__":
     main()
