@@ -21,7 +21,6 @@ import numpy as np
 import sympy
 import matplotlib.pyplot as plt
 from skimage.metrics import structural_similarity as ssim
-from scipy.optimize import minimize
 
 def main():
     # Load data
@@ -36,12 +35,12 @@ def main():
     lut = np.array(data).reshape(128, 128)
     print(f"Original LUT range: min={np.min(lut):.4f}, max={np.max(lut):.4f}")
 
-    # Raw array indices
-    r = np.arange(128)  # roughness indices 0-127
-    c = np.arange(128)  # cos_theta indices 0-127
+    # Normalized coordinates (0-1 for stability in fitting)
+    r = np.linspace(0, 1, 128)  # roughness 0-1
+    c = np.linspace(0, 1, 128)  # cos_theta 0-1
 
-    # Fit 2D polynomial of degree 4 for improved fit under 0.001 MSE
-    deg = 4
+    # Fit triangular 2D polynomial of higher degree 10 for more precision in low areas (e.g., top left corner)
+    deg = 10
     terms = []
     for i in range(deg + 1):
         for j in range(deg + 1 - i):
@@ -56,57 +55,62 @@ def main():
         X[:, k] = R_.ravel() ** i * C_.ravel() ** j
         k += 1
 
-    # Initial least squares fit as starting point
-    initial_coeffs, _, _, _ = np.linalg.lstsq(X, lut.ravel(), rcond=None)
-
-    def negative_ssim(coeffs):
-        approx = np.dot(X, coeffs).reshape(128, 128)
-        return -ssim(lut, np.clip(approx, 0, None), data_range=np.max(lut))
-
-    # Optimize coefficients for maximum SSIM
-    res = minimize(negative_ssim, initial_coeffs, method='BFGS')
-    coeffs = res.x
+    # Least squares fit (minimizes MSE)
+    coeffs, residuals, rank, s = np.linalg.lstsq(X, lut.ravel(), rcond=None)
 
     # Symbolic variables
-    x, y = sympy.symbols('r cos_theta')  # assuming r is roughness, cos_theta is something
+    x, y = sympy.symbols('roughness cos_theta')  # normalized 0-1
 
     # Build the expression
     expr = sum(coeffs[k] * x**i * y**j for k, (i, j) in enumerate(terms))
 
     # Optional: check the fit quality
     lut_approx = np.dot(X, coeffs).reshape(128, 128)
-    print(f"Approximated LUT range: min={np.min(lut_approx):.4f}, max={np.max(lut_approx):.4f}")
+    mse = np.mean((lut - lut_approx)**2)
     ssim_val = ssim(lut, np.clip(lut_approx, 0, None), data_range=np.max(lut))
-    print(f"SSIM optimization success: {res.success}")
-    if not res.success:
-        print(f"Optimization message: {res.message}")
-    print("Approximated analytical expression for the sheen LUT:")
+    print("Approximated analytical expression for the sheen LUT (normalize inputs to 0-1):")
     print(sympy.simplify(expr))
+    print(f"Mean Squared Error: {mse:.6f}")
     print(f"Structural Similarity Index (SSIM): {ssim_val:.4f}")
 
-    # Clip negative values in approximation for visualization (as sheen values can't be negative)
-    lut_display = lut
-    lut_approx_display = np.clip(lut_approx, 0, None)
-
-    # Use percentile scaling for better contrast and visibility (shared across both images)
-    vmin = np.percentile(lut_display, 5)
-    vmax = np.percentile(lut_display, 95)
-
-    print(f"Display range (5th to 95th percentile): vmin={vmin:.4f}, vmax={vmax:.4f}")
+    # Save individual images
+    vmin = 0.0
+    vmax = np.max(lut)
 
     plt.figure()
-    plt.imshow(lut_display, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
+    plt.imshow(lut, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
+    plt.title('Original LUT')
     plt.axis('off')
     plt.savefig('original_lut.png', dpi=300, bbox_inches='tight')
     plt.close()
 
     plt.figure()
-    plt.imshow(lut_approx_display, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
+    plt.imshow(lut_approx, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
+    plt.title('Approximated LUT')
     plt.axis('off')
     plt.savefig('approximated_lut.png', dpi=300, bbox_inches='tight')
     plt.close()
 
-    print("Images saved as original_lut.png and approximated_lut.png")
+    # Create comparison image to highlight differences
+    diff = np.abs(lut - lut_approx)
+    max_diff = np.max(diff)
+
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    axes[0].imshow(lut, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
+    axes[0].set_title('Original LUT')
+    axes[0].axis('off')
+    axes[1].imshow(lut_approx, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
+    axes[1].set_title('Approximated LUT')
+    axes[1].axis('off')
+    im = axes[2].imshow(diff, cmap='hot', origin='lower', vmin=0, vmax=max_diff)
+    axes[2].set_title('Absolute Difference (|Original - Approx|)')
+    axes[2].axis('off')
+    plt.colorbar(im, ax=axes[2])
+    plt.tight_layout()
+    plt.savefig('comparison_lut.png', dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print("Images saved: original_lut.png, approximated_lut.png, comparison_lut.png (side-by-side with difference)")
 
 if __name__ == "__main__":
     main()
