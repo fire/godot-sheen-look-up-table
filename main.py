@@ -20,6 +20,8 @@
 import numpy as np
 import sympy
 import matplotlib.pyplot as plt
+from skimage.metrics import structural_similarity as ssim
+from scipy.optimize import minimize
 
 def main():
     # Load data
@@ -54,8 +56,16 @@ def main():
         X[:, k] = R_.ravel() ** i * C_.ravel() ** j
         k += 1
 
-    # Least squares fit
-    coeffs, residuals, rank, s = np.linalg.lstsq(X, lut.ravel(), rcond=None)
+    # Initial least squares fit as starting point
+    initial_coeffs, _, _, _ = np.linalg.lstsq(X, lut.ravel(), rcond=None)
+
+    def negative_ssim(coeffs):
+        approx = np.dot(X, coeffs).reshape(128, 128)
+        return -ssim(lut, np.clip(approx, 0, None), data_range=np.max(lut))
+
+    # Optimize coefficients for maximum SSIM
+    res = minimize(negative_ssim, initial_coeffs, method='BFGS')
+    coeffs = res.x
 
     # Symbolic variables
     x, y = sympy.symbols('r cos_theta')  # assuming r is roughness, cos_theta is something
@@ -66,10 +76,13 @@ def main():
     # Optional: check the fit quality
     lut_approx = np.dot(X, coeffs).reshape(128, 128)
     print(f"Approximated LUT range: min={np.min(lut_approx):.4f}, max={np.max(lut_approx):.4f}")
-    mse = np.mean((lut - lut_approx)**2)
+    ssim_val = ssim(lut, np.clip(lut_approx, 0, None), data_range=np.max(lut))
+    print(f"SSIM optimization success: {res.success}")
+    if not res.success:
+        print(f"Optimization message: {res.message}")
     print("Approximated analytical expression for the sheen LUT:")
     print(sympy.simplify(expr))
-    print(f"Mean Squared Error: {mse}")
+    print(f"Structural Similarity Index (SSIM): {ssim_val:.4f}")
 
     # Clip negative values in approximation for visualization (as sheen values can't be negative)
     lut_display = lut
