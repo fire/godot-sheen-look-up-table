@@ -48,5 +48,5 @@ This polynomial approximation provides a balance of accuracy (MSE 0.000967) and 
 
 ## References
 
-- Godot PR #111568: Add sheen shading support
+- Godot PR [#111568](https://github.com/godotengine/godot/pull/111568): Add sheen shading support
 - Filament's sheen implementation
