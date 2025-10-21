@@ -4,9 +4,13 @@
 
 This project addresses a need in Godot Engine's rendering system, specifically for mobile and compatibility renderers that lack support for DFG (Distribution-Function Geometry) Lookup Tables. In the context of Godot Pull Request #111568 ("Add sheen shading support"), sheen shading was introduced to render cloth materials like cotton, velvet, and silk more realistically.
 
-Sheen shading uses a Sheen LUT (Lookup Table) to approximate complex light calculations. However, mobile and compatibility renderers cannot use this LUT due to performance constraints, leading to artifacts, especially at low roughness values (<= 0.3).
+Sheen shading uses a DFG LUT for pre-filtered environment lighting, approximating the Distribution-Function Geometry integral (brdf.z/cloth_brdf). However, mobile and compatibility renderers cannot use this LUT due to performance constraints, leading to artifacts, especially at low roughness values (<= 0.3).
 
-This project provides an analytical approximation of the Sheen LUT using numerical fitting and symbolic expression generation. The goal is to replace the texture lookup with a fast, compute-efficient mathematical function that can run on all renderers.
+This project provides an analytical approximation of the Sheen LUT (blue channel of dfg_lut.dds) using numerical fitting and symbolic expression generation. The goal is to replace the texture lookup with a fast, compute-efficient analytical function that can run on all renderers.
+
+Variables (from integrate_dfg.glsl in the PR):
+- `r`: Sheen roughness (0 to 1)
+- `cos_theta`: NdotV (cosine of viewing angle, 0 to 1)
 
 ## Implementation
 
