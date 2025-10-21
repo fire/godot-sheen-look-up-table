@@ -11,7 +11,7 @@ This project provides an analytical approximation of the Sheen LUT using numeric
 ## Implementation
 
 - **Data Source**: The `thirdparty/sheen_lut_data.txt` contains the blue channel values extracted from the DFG DDS file, forming a 128x128 lookup table.
-- **Fitting Method**: We fit a rational function (degree 2 numerator / degree 1 denominator) to all data points using nonlinear least squares optimization (scipy.optimize).
+- **Fitting Method**: We fit a 2D polynomial of degree 8 using linear least squares optimization.
 - **Output**: An analytical expression expressed symbolically using SymPy-derived equations.
 
 ## Current Approximation
@@ -40,7 +40,7 @@ This will output the fitted expression and error metrics.
 
 ## Notes
 
-This rational approximation is more computationally efficient in shaders (fewer operations than high-degree polynomials) while providing a good fit. For even better accuracy, higher-degree rationals or other models can be explored.
+This polynomial approximation provides a balance of accuracy (MSE 0.000967) and shader efficiency (45 terms, mostly multiplications and additions). Slower than low-degree models but faster than LUT lookups for mobile/compatibility renderers.
 
 ## References
 
