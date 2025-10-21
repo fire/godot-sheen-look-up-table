@@ -33,15 +33,22 @@ def main():
 
     # Reshape to 128x128
     lut = np.array(data).reshape(128, 128)
-    print(f"Original LUT range: min={np.min(lut):.4f}, max={np.max(lut):.4f}")
+    vmax = np.max(lut)
+    print(f"Original LUT range: min={np.min(lut):.4f}, max={vmax:.4f}")
+    print(f"LUT max value for denormalization: {vmax}")
 
-    # Normalized coordinates (0-1 for stability in fitting)
-    r = np.linspace(0, 1, 128)  # roughness 0-1
-    c = np.linspace(0, 1, 128)  # cos_theta 0-1
+    # Normalize LUT to compress range to 0-1 for better fit
+    norm_lut = lut / vmax
 
-    # Fit full 2D polynomial of degree 12 for very high precision (13^2 = 169 terms)
-    deg = 12
-    terms = [(i, j) for i in range(deg + 1) for j in range(deg + 1)]
+    # Normalized inputs (0-1) for better numerical fit and higher SSIM
+    # In shader: compute norm_roughness = roughness_index / 127.0, norm_cos_theta = cos_theta_index / 127.0
+    # Then: output = polynomial(norm_roughness, norm_cos_theta) * vmax
+    r = np.linspace(0, 1, 128)  # roughness normalized 0-1
+    c = np.linspace(0, 1, 128)  # cos_theta normalized 0-1
+
+    # Fit triangular 2D polynomial of degree 16 for higher precision ((17+1)*(18)/2 = 153 terms)
+    deg = 16
+    terms = [(i, j) for i in range(deg + 1) for j in range(deg - i + 1)]
 
     n_terms = len(terms)
     R_, C_ = np.meshgrid(r, c, indexing='ij')
@@ -52,25 +59,29 @@ def main():
         X[:, k] = R_.ravel() ** i * C_.ravel() ** j
         k += 1
 
-    # Least squares fit (minimizes MSE)
-    coeffs, residuals, rank, s = np.linalg.lstsq(X, lut.ravel(), rcond=None)
+    coeffs = np.linalg.lstsq(X, norm_lut.ravel(), rcond=None)[0]
+    # Approximate coefficients to float32 precision
+    coeffs = np.round(coeffs, 7)
 
     # Symbolic variables
-    x, y = sympy.symbols('roughness cos_theta')  # normalized 0-1
+    x, y = sympy.symbols('roughness cos_theta')
 
     # Build the expression
     expr = sum(coeffs[k] * x**i * y**j for k, (i, j) in enumerate(terms))
 
-    # Optional: check the fit quality
-    lut_approx = np.dot(X, coeffs).reshape(128, 128)
+    # Check fit quality
+    norm_approx = np.dot(X, coeffs).reshape(128, 128)
+    lut_approx = norm_approx * vmax
     mse = np.mean((lut - lut_approx)**2)
-    ssim_val = ssim(lut, np.clip(lut_approx, 0, None), data_range=np.max(lut))
-    print("Approximated analytical expression for the sheen LUT (normalize inputs to 0-1):")
+    ssim_val = ssim(lut, np.clip(lut_approx, 0, None), data_range=vmax)
+    print("Approximated analytical expression for the sheen LUT (normalized inputs 0-1):")
+    # Note: In shader, compute norm_roughness = roughness_index / 127.0, norm_cos_theta = cos_theta_index / 127.0
+    # Then: sheen_value = polynomial_output * vmax
     print(sympy.simplify(expr))
     print(f"Mean Squared Error: {mse:.8f}")
     print(f"Structural Similarity Index (SSIM): {ssim_val:.4f}")
 
-    # Save individual images
+    # Save images
     vmin = 0.0
     vmax = np.max(lut)
 
@@ -88,7 +99,7 @@ def main():
     plt.savefig('approximated_lut.png', dpi=300, bbox_inches='tight')
     plt.close()
 
-    # Create comparison image to highlight differences
+    # Create comparison image
     diff = np.abs(lut - lut_approx)
     max_diff = np.max(diff)
 
@@ -96,18 +107,17 @@ def main():
     axes[0].imshow(lut, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
     axes[0].set_title('Original LUT')
     axes[0].axis('off')
+
     axes[1].imshow(lut_approx, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
     axes[1].set_title('Approximated LUT')
     axes[1].axis('off')
-    im = axes[2].imshow(diff, cmap='hot', origin='lower', vmin=0, vmax=max_diff)
-    axes[2].set_title('Absolute Difference (|Original - Approx|)')
+
+    axes[2].imshow(diff, cmap='gray', origin='lower')
+    axes[2].set_title(f'Difference (max: {max_diff:.4e})')
     axes[2].axis('off')
-    plt.colorbar(im, ax=axes[2])
-    plt.tight_layout()
+
     plt.savefig('comparison_lut.png', dpi=300, bbox_inches='tight')
     plt.close()
-
-    print("Images saved: original_lut.png, approximated_lut.png, comparison_lut.png")
 
 if __name__ == "__main__":
     main()
