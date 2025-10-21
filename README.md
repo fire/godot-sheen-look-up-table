@@ -9,28 +9,38 @@ Sheen shading uses a DFG LUT for pre-filtered environment lighting, approximatin
 This project provides an analytical approximation of the Sheen LUT (blue channel of dfg_lut.dds) using numerical fitting and symbolic expression generation. The goal is to replace the texture lookup with a fast, compute-efficient analytical function that can run on all renderers.
 
 Variables (from integrate_dfg.glsl in the PR):
+
 - `r`: Sheen roughness (0 to 1)
 - `cos_theta`: NdotV (cosine of viewing angle, 0 to 1)
 
 ## Implementation
 
 - **Data Source**: The `thirdparty/sheen_lut_data.txt` contains the blue channel values extracted from the DFG DDS file, forming a 128x128 lookup table.
-- **Fitting Method**: We fit a 2D polynomial of degree 4 using linear least squares optimization.
+- **Fitting Method**: We fit a rational function (ratio of 2D polynomials, numerator degree 5, denominator degree 3) using nonlinear least squares optimization.
 - **Output**: An analytical expression expressed symbolically using SymPy-derived equations.
 
 ## Current Approximation
 
-Derivative of a degree 4 polynomial (15 terms) fitted using least squares, providing MSE ~0.056 for direct shader implementation without LUT lookup.
+Rational function fitted using nonlinear least squares, providing superior accuracy for shader implementation without LUT lookup.
+
+Numerator (degree 5 polynomial, 21 terms):
 
 ```
-10.541436656511*cos_theta**4 - 15.8906606011087*cos_theta**3*r - 17.1488136680321*cos_theta**3 + 10.9806612332594*cos_theta**2*r**2 + 17.9790429861389*cos_theta**2*r + 8.53664845039853*cos_theta**2 + 0.134519806072525*cos_theta*r**3 - 12.0565363127585*cos_theta*r**2 - 3.74737790070742*cos_theta*r - 1.96569854338589*cos_theta - 0.0279244335528505*r**4 - 0.0341913862356636*r**3 + 2.29548431845381*r**2 - 0.149368395647259*r + 0.623898536703856
+1.10125048040805*cos_theta**5 + 6.74489226245854*cos_theta**4*r - 8.39998369444234*cos_theta**4 + 2.39569908771151*cos_theta**3*r**2 - 16.854682875742*cos_theta**3*r + 15.0376015207074*cos_theta**3 - 1.25628927025611*cos_theta**2*r**3 - 2.46572927745832*cos_theta**2*r**2 + 16.012008976718*cos_theta**2*r - 12.1524412563849*cos_theta**2 + 3.07814209710205*cos_theta*r**4 - 5.79768979753759*cos_theta*r**3 + 7.71629423145735*cos_theta*r**2 - 10.6212176237166*cos_theta*r + 5.55862212332412*cos_theta + 1.22191813729662*r**5 - 3.57850307085723*r**4 + 3.67267227650517*r**3 - 1.14670718891106*r**2 - 0.759436562230116*r + 0.592867865882987
+```
+
+Denominator (degree 3 polynomial + 1, 10 terms):
+
+```
+5.71239688081368*cos_theta**3 + 7.33391521962325*cos_theta**2*r - 6.60743404579406*cos_theta**2 + 11.2231070777972*cos_theta*r**2 - 23.1288976628828*cos_theta*r + 11.9206921626418*cos_theta - 0.250515373814049*r**3 + 1.48203243327513*r**2 - 2.2313629253502*r + 1
 ```
 
 Where:
+
 - `r`: Normalized roughness (0 to 1)
 - `cos_theta`: NdotV (cosine of the viewing angle)
 
-Mean Squared Error: 0.05590929665523771
+Mean Squared Error: 5.337380077659139e-05
 
 ## Usage
 
@@ -44,7 +54,7 @@ This will output the fitted expression and error metrics.
 
 ## Notes
 
-This polynomial approximation provides a balance of accuracy (MSE 0.0559) and shader efficiency (15 terms, mostly multiplications and additions). Faster and simpler than higher-degree models but with reduced accuracy compared to LUT lookups.
+This rational function approximation provides higher accuracy (MSE ~0.00005) than polynomial approximations, achieving ~20x better fidelity while maintaining reasonable shader complexity. The expression involves a division operation but is efficient for real-time rendering and superior to very high-degree polynomial fits when a managed analytical expression is needed.
 
 ## References
 

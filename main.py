@@ -19,6 +19,7 @@
 
 import numpy as np
 import sympy
+from scipy.optimize import least_squares
 
 def main():
     # Load data
@@ -36,36 +37,86 @@ def main():
     r = np.linspace(0, 1, 128)  # roughness perhaps
     c = np.linspace(0, 1, 128)  # cos_theta or something
 
-    # Fit 2D polynomial of degree 4 for improved fit under 0.001 MSE
-    deg = 4
-    terms = []
-    for i in range(deg + 1):
-        for j in range(deg + 1 - i):
-            terms.append((i, j))
+    # Degrees for numerator and denominator
+    deg_num = 5  # degree for numerator polynomial
+    deg_den = 3  # degree for denominator polynomial, keep lower to avoid overfitting
 
-    n_terms = len(terms)
+    # Generate terms for numerator
+    terms_num = []
+    for i in range(deg_num + 1):
+        for j in range(deg_num + 1 - i):
+            terms_num.append((i, j))
+    n_terms_num = len(terms_num)
+
+    # Generate terms for denominator (excluding (0,0) to avoid trivial solutions)
+    terms_den = []
+    for i in range(deg_den + 1):
+        for j in range(deg_den + 1 - i):
+            if i + j > 0:  # exclude constant term
+                terms_den.append((i, j))
+    n_terms_den = len(terms_den)
+
+    total_terms = n_terms_num + n_terms_den
+
     R_, C_ = np.meshgrid(r, c, indexing='ij')
+    R = R_.ravel()
+    C = C_.ravel()
+    lut_flat = lut.ravel()
 
-    X = np.zeros((128 * 128, n_terms))
-    k = 0
-    for i, j in terms:
-        X[:, k] = R_.ravel() ** i * C_.ravel() ** j
-        k += 1
+    def residual(coeffs):
+        numer_coeffs = coeffs[:n_terms_num]
+        denom_coeffs = coeffs[n_terms_num:]
 
-    # Least squares fit
-    coeffs, residuals, rank, s = np.linalg.lstsq(X, lut.ravel(), rcond=None)
+        p = np.zeros(len(lut_flat))
+        for k, (i, j) in enumerate(terms_num):
+            p += numer_coeffs[k] * R ** i * C ** j
+
+        q = np.ones(len(lut_flat))
+        for k, (i, j) in enumerate(terms_den):
+            q += denom_coeffs[k] * R ** i * C ** j
+
+        approx = p / q
+        return lut_flat - approx
+
+    # Initial guess
+    initial_guess = np.zeros(total_terms)
+
+    # Nonlinear least squares fit
+    result = least_squares(residual, initial_guess, method='lm')  # Levenberg-Marquardt
+
+    coeffs = result.x
+
+    numer_coeffs = coeffs[:n_terms_num]
+    denom_coeffs = coeffs[n_terms_num:]
 
     # Symbolic variables
-    x, y = sympy.symbols('r cos_theta')  # assuming r is roughness, cos_theta is something
+    x, y_sym = sympy.symbols('r cos_theta')  # x is r, y_sym is cos_theta
 
-    # Build the expression
-    expr = sum(coeffs[k] * x**i * y**j for k, (i, j) in enumerate(terms))
+    # Build numerator expression
+    numer_expr = sum(numer_coeffs[k] * x**i * y_sym**j for k, (i, j) in enumerate(terms_num))
 
-    print("Approximated analytical expression for the sheen LUT:")
-    print(sympy.simplify(expr))
+    # Denominator: 1 + sum denom terms (since we excluded (0,0))
+    denom_expr = 1 + sum(denom_coeffs[k] * x**i * y_sym**j for k, (i, j) in enumerate(terms_den))
 
-    # Optional: check the fit quality
-    lut_approx = np.dot(X, coeffs).reshape(128, 128)
+    # Rational function
+    rational_expr = numer_expr / denom_expr
+    rational_expr = sympy.simplify(rational_expr)
+
+    print("Approximated analytical expression for the sheen LUT (Rational Function):")
+    print(rational_expr)
+
+    # Check fit quality
+    p_values = np.zeros(len(lut_flat))
+    for k, (i, j) in enumerate(terms_num):
+        p_values += numer_coeffs[k] * R ** i * C ** j
+
+    q_values = np.ones(len(lut_flat))
+    for k, (i, j) in enumerate(terms_den):
+        q_values += denom_coeffs[k] * R ** i * C ** j
+
+    lut_approx = p_values / q_values
+    lut_approx = lut_approx.reshape(128, 128)
+
     mse = np.mean((lut - lut_approx)**2)
     print(f"Mean Squared Error: {mse}")
 
