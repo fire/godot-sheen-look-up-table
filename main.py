@@ -39,12 +39,9 @@ def main():
     r = np.linspace(0, 1, 128)  # roughness 0-1
     c = np.linspace(0, 1, 128)  # cos_theta 0-1
 
-    # Fit triangular 2D polynomial of higher degree 10 for more precision in low areas (e.g., top left corner)
-    deg = 10
-    terms = []
-    for i in range(deg + 1):
-        for j in range(deg + 1 - i):
-            terms.append((i, j))
+    # Fit full 2D polynomial of degree 12 for very high precision (13^2 = 169 terms)
+    deg = 12
+    terms = [(i, j) for i in range(deg + 1) for j in range(deg + 1)]
 
     n_terms = len(terms)
     R_, C_ = np.meshgrid(r, c, indexing='ij')
@@ -70,7 +67,7 @@ def main():
     ssim_val = ssim(lut, np.clip(lut_approx, 0, None), data_range=np.max(lut))
     print("Approximated analytical expression for the sheen LUT (normalize inputs to 0-1):")
     print(sympy.simplify(expr))
-    print(f"Mean Squared Error: {mse:.6f}")
+    print(f"Mean Squared Error: {mse:.8f}")
     print(f"Structural Similarity Index (SSIM): {ssim_val:.4f}")
 
     # Save individual images
@@ -110,7 +107,7 @@ def main():
     plt.savefig('comparison_lut.png', dpi=300, bbox_inches='tight')
     plt.close()
 
-    print("Images saved: original_lut.png, approximated_lut.png, comparison_lut.png (side-by-side with difference)")
+    print("Images saved: original_lut.png, approximated_lut.png, comparison_lut.png")
 
 if __name__ == "__main__":
     main()
