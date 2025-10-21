@@ -36,8 +36,8 @@ def main():
     r = np.linspace(0, 1, 128)  # roughness perhaps
     c = np.linspace(0, 1, 128)  # cos_theta or something
 
-    # Fit 2D polynomial of degree 8 for improved fit under 0.001 MSE
-    deg = 8
+    # Fit 2D polynomial of degree 4 for improved fit under 0.001 MSE
+    deg = 4
     terms = []
     for i in range(deg + 1):
         for j in range(deg + 1 - i):

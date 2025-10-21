@@ -1,73 +1,40 @@
-import struct
 import numpy as np
+import os
+import struct
 
-def read_dds_rgba16f(filepath):
-    with open(filepath, 'rb') as f:
-        header = f.read(128)
-        
-        magic = header[:4]
-        if magic != b'DDS ':
-            raise ValueError("Invalid DDS")
-        
-        width = 128
-        height = 128
-        channels = 4
-        bytes_per_channel = 2
-        
-        total_bytes = width * height * channels * bytes_per_channel
-        pixel_data = f.read(total_bytes)
-        
-        if len(pixel_data) < total_bytes:
-            raise ValueError(f"Incomplete file. Expected {total_bytes} bytes, got {len(pixel_data)}")
-    
-    return pixel_data, width, height
+def read_dds_r16f_to_list(input_filename, output_filename, width=128, height=128):
+    PIXEL_COUNT = width * height
+    DDS_HEADER_SIZE = 128
 
-def extract_blue_channel(pixel_data, width, height):
-    blue_values = []
-    channels = 4
-    bytes_per_channel = 2
-    bytes_per_pixel = channels * bytes_per_channel
-    
-    for i in range(width * height):
-        offset = i * bytes_per_pixel
-        
-        blue_offset = offset + (2 * bytes_per_channel)
-        
-        blue_bytes = pixel_data[blue_offset:blue_offset + bytes_per_channel]
-        
-        blue_value = np.frombuffer(blue_bytes, dtype=np.float16)[0]
-        blue_values.append(float(blue_value))
-    
-    return blue_values
+    if not os.path.exists(input_filename):
+        print(f"Error: The file '{input_filename}' was not found.")
+        return
 
-def save_to_txt(values, output_filepath):
-    with open(output_filepath, 'w') as f:
-        f.write('[')
-        for i, value in enumerate(values):
-            if i > 0:
-                f.write(', ')
-            if i % 10 == 0 and i > 0:
-                f.write('\n ')
-            f.write(f'{value}')
-        f.write(']')
-    
-    print(f"{len(values)} values ​​were saved in {output_filepath}")
-
-if __name__ == "__main__":
-    input_dds = "dfg_lut.dds"
-    output_txt = "sheen_lut_data.txt"
-    
     try:
-        print(f"Reading {input_dds}...")
-        pixel_data, width, height = read_dds_rgba16f(input_dds)
+        with open(input_filename, 'rb') as f:
+            
+            f.seek(DDS_HEADER_SIZE)
+            
+            data_bytes = f.read(PIXEL_COUNT * 2) 
         
-        print("Extracting Blue channel...")
-        blue_values = extract_blue_channel(pixel_data, width, height)
-        
-        print(f"Saving values ​​in {output_txt}...")
-        save_to_txt(blue_values, output_txt)
-        
-    except FileNotFoundError:
-        print(f"Error: File not found {input_dds}")
+        # float16
+        data_half_precision = np.frombuffer(data_bytes, dtype=np.float16)
+
+        # float16 to float32
+        data_full_precision = data_half_precision.astype(np.float32)
+
+        # numpy array to Python list
+        float_list = data_full_precision.tolist()
+
+        with open(output_filename, 'w') as out_f:
+            out_f.write(str(float_list))
+            
+        print(f"Success: {len(float_list)} values ​​have been extracted and saved to '{output_filename}'.")
+
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"An error occurred while processing the file: {e}")
+
+input_file = 'sheen_lut.dds'
+output_file = 'sheen_lut_data.txt'
+
+read_dds_r16f_to_list(input_file, output_file)
