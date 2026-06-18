@@ -274,13 +274,26 @@ def renderMatrix (lut approxGrid : Array Float) (fit : EdgeFit) : IO Unit := do
   writePpm "rendered/_bl.ppm" blPixels 128 128
   writePpm "rendered/_br.ppm" brPixels 128 128
   -- Compose with ImageMagick: +append = horizontal, -append = vertical
-  runConvert #["rendered/_tl.ppm", "rendered/_tr.ppm", "+append", "rendered/_top.ppm"]
-  runConvert #["rendered/_bl.ppm", "rendered/_br.ppm", "+append", "rendered/_bot.ppm"]
+  -- Label each cell before composing
+  let label : String → String → String → IO Unit := fun src lbl dst =>
+    runConvert #[src,
+      "-fill", "white", "-stroke", "black", "-strokewidth", "1",
+      "-font", "DejaVu-Sans-Bold", "-pointsize", "11",
+      "-gravity", "NorthWest", "-annotate", "+3+3", lbl,
+      dst]
+  label "rendered/_tl.ppm" "Ground truth"        "rendered/_tl_l.ppm"
+  label "rendered/_tr.ppm" "Best approx (EC)"    "rendered/_tr_l.ppm"
+  label "rendered/_bl.ppm" "Ground truth (false)" "rendered/_bl_l.ppm"
+  label "rendered/_br.ppm" "Best approx (false)"  "rendered/_br_l.ppm"
+  runConvert #["rendered/_tl_l.ppm", "rendered/_tr_l.ppm", "+append", "rendered/_top.ppm"]
+  runConvert #["rendered/_bl_l.ppm", "rendered/_br_l.ppm", "+append", "rendered/_bot.ppm"]
   runConvert #["rendered/_top.ppm", "rendered/_bot.ppm", "-append", "rendered/matrix_2x2.png"]
   -- Clean up all temp files
-  for f in ["rendered/_tl.ppm", "rendered/_tr.ppm",
-            "rendered/_bl.ppm", "rendered/_br.ppm",
-            "rendered/_top.ppm", "rendered/_bot.ppm"] do
+  for f in ["rendered/_tl.ppm",   "rendered/_tr.ppm",
+            "rendered/_bl.ppm",   "rendered/_br.ppm",
+            "rendered/_tl_l.ppm", "rendered/_tr_l.ppm",
+            "rendered/_bl_l.ppm", "rendered/_br_l.ppm",
+            "rendered/_top.ppm",  "rendered/_bot.ppm"] do
     rmTemp f
   IO.println "wrote rendered/matrix_2x2.png  (GT grey | approx grey // GT false | approx false)"
 
