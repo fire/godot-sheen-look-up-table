@@ -232,43 +232,22 @@ def greyPixel (v : Float) : (Nat × Nat × Nat) :=
   let g := (max 0.0 (min 1.0 v) * 255.0).toUInt8.toNat
   (g, g, g)
 
-def renderTrueColor (lut approxGrid : Array Float) (fit : EdgeFit) : IO Unit := do
-  -- Build edge-corrected grid
-  let approxEC : Array Float := Id.run do
-    let mut arr := Array.mkEmpty (128 * 128)
-    for i in [0:128] do
-      let roughness := gridFloats[i]!
-      for j in [0:128] do
-        let idx := i * 128 + j
-        let cosTheta := gridFloats[j]!
-        let y := max (approxGrid[idx]! +
-          fit.amplitude * edgeWeight fit.params roughness cosTheta) 0.0
-        arr := arr.push y
-    pure arr
-  let lutPixels   := lut.map        greyPixel
-  let rawPixels   := approxGrid.map greyPixel
-  let ecPixels    := approxEC.map   greyPixel
-  IO.FS.createDirAll "rendered"
-  writePpm "rendered/lut_true_color.ppm"         lutPixels  128 128
-  writePpm "rendered/approx_true_color.ppm"      rawPixels  128 128
-  writePpm "rendered/approx_ec_true_color.ppm"   ecPixels   128 128
-  IO.println "wrote rendered/lut_true_color.ppm"
-  IO.println "wrote rendered/approx_true_color.ppm"
-  IO.println "wrote rendered/approx_ec_true_color.ppm"
-  let hasConvert ← IO.Process.run { cmd := "which", args := #["convert"] } |>.toBaseIO
-  match hasConvert with
-  | .ok _ =>
-    let topng : List (String × String) := [
-      ("rendered/lut_true_color.ppm",       "rendered/lut_true_color.png"),
-      ("rendered/approx_true_color.ppm",    "rendered/approx_true_color.png"),
-      ("rendered/approx_ec_true_color.ppm", "rendered/approx_ec_true_color.png")]
-    for (src, dst) in topng do
-      let args : IO.Process.SpawnArgs := { cmd := "convert", args := #[src, dst] }
-      _ ← IO.Process.run args
-      IO.println s!"wrote {dst}"
-  | .error _ => pure ()
+/-- Run `convert` with given args; silently ignore errors. -/
+def runConvert (args : Array String) : IO Unit := do
+  let a : IO.Process.SpawnArgs := { cmd := "convert", args := args }
+  _ ← IO.Process.run a
 
-def renderFalseColor (lut approxGrid : Array Float) (fit : EdgeFit) : IO Unit := do
+/-- Delete a file, ignoring errors. -/
+def rmTemp (path : String) : IO Unit := do
+  _ ← (IO.FS.removeFile path).toBaseIO
+  pure ()
+
+/-- Render a 2×2 matrix PNG:
+      top row:    ground truth (grey)  | best approx (grey)
+      bottom row: ground truth (false) | best approx (false)
+    All four cells share the same value scale. Only matrix_2x2.png is kept. -/
+def renderMatrix (lut approxGrid : Array Float) (fit : EdgeFit) : IO Unit := do
+  -- Build edge-corrected approximation
   let approxEC : Array Float := Id.run do
     let mut arr := Array.mkEmpty (128 * 128)
     for i in [0:128] do
@@ -276,49 +255,34 @@ def renderFalseColor (lut approxGrid : Array Float) (fit : EdgeFit) : IO Unit :=
       for j in [0:128] do
         let idx := i * 128 + j
         let cosTheta := gridFloats[j]!
-        let y := max (approxGrid[idx]! +
-          fit.amplitude * edgeWeight fit.params roughness cosTheta) 0.0
-        arr := arr.push y
+        arr := arr.push (max (approxGrid[idx]! +
+          fit.amplitude * edgeWeight fit.params roughness cosTheta) 0.0)
     pure arr
-  let mut rawErrors := Array.mkEmpty (128 * 128)
-  let mut ecErrors  := Array.mkEmpty (128 * 128)
-  for idx in [0:128 * 128] do
-    let truth  := lut[idx]!
-    let rawErr := Float.abs (truth - approxGrid[idx]!)
-    let ecErr  := Float.abs (truth - approxEC[idx]!)
-    rawErrors := rawErrors.push rawErr
-    ecErrors  := ecErrors.push ecErr
-  -- Use 99th-percentile as scale cap so the bulk of the field gets colour
-  let sorted     := rawErrors.toList.mergeSort (· ≤ ·) |>.toArray
-  let sortedEC   := ecErrors.toList.mergeSort  (· ≤ ·) |>.toArray
-  let p99idx     := (rawErrors.size * 99) / 100
-  let p99idxEC   := (ecErrors.size * 99) / 100
-  let scale   := max (sorted[p99idx]!)   0.001
-  let ecScale := max (sortedEC[p99idxEC]!) 0.001
-  let rawPixels := rawErrors.map (fun e => falseColor (e / scale))
-  let ecPixels  := ecErrors.map  (fun e => falseColor (e / ecScale))
+  -- Shared scale: 99th-percentile of LUT values (avoids one bright corner swamping the palette)
+  let sortedLut := lut.toList.mergeSort (· ≤ ·) |>.toArray
+  let p99       := (lut.size * 99) / 100
+  let valMax    := max (sortedLut[p99]!) 0.001
+  -- Four cell pixel arrays
+  let tlPixels := lut.map     greyPixel                          -- top-left:  GT grey
+  let trPixels := approxEC.map greyPixel                         -- top-right: approx grey
+  let blPixels := lut.map     (fun v => falseColor (v / valMax)) -- bot-left:  GT false
+  let brPixels := approxEC.map (fun v => falseColor (v / valMax))-- bot-right: approx false
   IO.FS.createDirAll "rendered"
-  writePpm "rendered/comparison_difference_false_color.ppm" rawPixels 128 128
-  writePpm "rendered/edge_corrected_difference_false_color.ppm" ecPixels 128 128
-  IO.println "wrote rendered/comparison_difference_false_color.ppm"
-  IO.println "wrote rendered/edge_corrected_difference_false_color.ppm"
-  let cvt ← IO.Process.run { cmd := "which", args := #["convert"] } |>.toBaseIO
-  match cvt with
-  | .ok _ =>
-    let cvtArgs1 : IO.Process.SpawnArgs := {
-      cmd := "convert",
-      args := #["rendered/comparison_difference_false_color.ppm",
-                "rendered/comparison_difference_false_color.png"] }
-    let cvtArgs2 : IO.Process.SpawnArgs := {
-      cmd := "convert",
-      args := #["rendered/edge_corrected_difference_false_color.ppm",
-                "rendered/edge_corrected_difference_false_color.png"] }
-    _ ← IO.Process.run cvtArgs1
-    _ ← IO.Process.run cvtArgs2
-    IO.println "wrote rendered/comparison_difference_false_color.png"
-    IO.println "wrote rendered/edge_corrected_difference_false_color.png"
-  | .error _ =>
-    IO.println "(convert not found; PNG conversion skipped)"
+  -- Write temp PPMs
+  writePpm "rendered/_tl.ppm" tlPixels 128 128
+  writePpm "rendered/_tr.ppm" trPixels 128 128
+  writePpm "rendered/_bl.ppm" blPixels 128 128
+  writePpm "rendered/_br.ppm" brPixels 128 128
+  -- Compose with ImageMagick: +append = horizontal, -append = vertical
+  runConvert #["rendered/_tl.ppm", "rendered/_tr.ppm", "+append", "rendered/_top.ppm"]
+  runConvert #["rendered/_bl.ppm", "rendered/_br.ppm", "+append", "rendered/_bot.ppm"]
+  runConvert #["rendered/_top.ppm", "rendered/_bot.ppm", "-append", "rendered/matrix_2x2.png"]
+  -- Clean up all temp files
+  for f in ["rendered/_tl.ppm", "rendered/_tr.ppm",
+            "rendered/_bl.ppm", "rendered/_br.ppm",
+            "rendered/_top.ppm", "rendered/_bot.ppm"] do
+    rmTemp f
+  IO.println "wrote rendered/matrix_2x2.png  (GT grey | approx grey // GT false | approx false)"
 
 def checkGroundTruth : IO Unit := do
   let raw ← IO.FS.readFile lutPath
@@ -358,36 +322,7 @@ def checkGroundTruth : IO Unit := do
   IO.println s!"edge correction cos smoothstep: {fit.params.cos0} -> {fit.params.cos1}"
   IO.println s!"edge-corrected MSE: {fit.mse}"
   IO.println s!"edge-corrected max abs error: {fit.maxErr} at row {fit.maxIdx / 128}, col {fit.maxIdx % 128}"
-  -- Render false-colour difference images
-  renderFalseColor lut approxGrid fit
-  -- Render true-colour (greyscale) LUT and approximation images
-  renderTrueColor lut approxGrid fit
-  -- 2-panel montage: ground truth | edge-corrected approx
-  let hasConvert ← IO.Process.run { cmd := "which", args := #["convert"] } |>.toBaseIO
-  match hasConvert with
-  | .ok _ =>
-    let montageArgs : IO.Process.SpawnArgs := {
-      cmd := "convert",
-      args := #[
-        "rendered/lut_true_color.ppm",
-        "rendered/approx_ec_true_color.ppm",
-        "+append",
-        "-scale", "256x128",
-        "rendered/lut_triptych_render.png"] }
-    _ ← IO.Process.run montageArgs
-    IO.println "wrote rendered/lut_triptych_render.png  (ground truth | approx-EC)"
-    -- 2-panel false-colour montage: raw Chebyshev error | edge-corrected error
-    let fcArgs : IO.Process.SpawnArgs := {
-      cmd := "convert",
-      args := #[
-        "rendered/comparison_difference_false_color.ppm",
-        "rendered/edge_corrected_difference_false_color.ppm",
-        "+append",
-        "-scale", "256x128",
-        "rendered/false_color_comparison.png"] }
-    _ ← IO.Process.run fcArgs
-    IO.println "wrote rendered/false_color_comparison.png  (raw error | EC error)"
-  | .error _ => pure ()
+  renderMatrix lut approxGrid fit
 
 end SheenLutMobileCheck
 
