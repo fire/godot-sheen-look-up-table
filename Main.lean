@@ -76,33 +76,48 @@ def chebEval (coeffs : Array Float) (offset : Nat) (x : Float) : Float :=
     pure acc
 
 def approxAt (roughnessIdx cosThetaIdx : Nat) : Float :=
-  let r := warpedCoord roughnessIdx
-  let v := warpedCoord cosThetaIdx
-  let y :=
-    chebEval roughCoeffs 0 r * chebEval cosCoeffs 0 v +
-    chebEval roughCoeffs 11 r * chebEval cosCoeffs 11 v +
-    chebEval roughCoeffs 22 r * chebEval cosCoeffs 22 v +
-    chebEval roughCoeffs 33 r * chebEval cosCoeffs 33 v +
-    chebEval roughCoeffs 44 r * chebEval cosCoeffs 44 v +
-    chebEval roughCoeffs 55 r * chebEval cosCoeffs 55 v
-  max y 0.0
+  let roughness := gridFloats[roughnessIdx]!
+  let NdotV     := gridFloats[cosThetaIdx]!
+  let sr := Float.sqrt roughness
+  let sv := Float.sqrt NdotV
+  let topThresh := Float.ofNat pbTopStart / 127.0
+  if roughness >= topThresh then
+    -- Top rows: exact LUT values, bilinear in roughness × cosTheta
+    let tRow := (roughness - topThresh) / (1.0 - topThresh) * Float.ofNat (pbTopRows - 1)
+    let tRow := max 0.0 (min (Float.ofNat (pbTopRows - 1) - 0.000001) tRow)
+    let row0 := tRow.toUSize.toNat
+    let row1 := min (row0 + 1) (pbTopRows - 1)
+    let tr   := tRow - Float.ofNat row0
+    let colF := NdotV * 127.0
+    let col0 := min (colF.toUSize.toNat) (pbTopCols - 2)
+    let col1 := col0 + 1
+    let tc   := colF - Float.ofNat col0
+    let v0 := pbTopGrid[row0 * pbTopCols + col0]! * (1.0 - tc) + pbTopGrid[row0 * pbTopCols + col1]! * tc
+    let v1 := pbTopGrid[row1 * pbTopCols + col0]! * (1.0 - tc) + pbTopGrid[row1 * pbTopCols + col1]! * tc
+    max (v0 * (1.0 - tr) + v1 * tr) 0.0
+  else
+    -- Interior: bilinear on sqrt-warped 10×10 grid
+    let nr := sr / pbRsqMax * Float.ofNat (pbIntNR - 1)
+    let nc := sv             * Float.ofNat (pbIntNC - 1)
+    let nr := max 0.0 (min (Float.ofNat (pbIntNR - 1) - 0.000001) nr)
+    let nc := max 0.0 (min (Float.ofNat (pbIntNC - 1) - 0.000001) nc)
+    let r0 := nr.toUSize.toNat
+    let c0 := nc.toUSize.toNat
+    let tr := nr - Float.ofNat r0
+    let tc := nc - Float.ofNat c0
+    let v00 := pbIntGrid[r0 * pbIntNC + c0]!
+    let v10 := pbIntGrid[(r0 + 1) * pbIntNC + c0]!
+    let v01 := pbIntGrid[r0 * pbIntNC + c0 + 1]!
+    let v11 := pbIntGrid[(r0 + 1) * pbIntNC + c0 + 1]!
+    max (v00*(1.0-tr)*(1.0-tc) + v10*tr*(1.0-tc) + v01*(1.0-tr)*tc + v11*tr*tc) 0.0
 
 /-- Precompute the 128×128 grid of approxAt values once, reused across all edge candidates. -/
 def buildApproxGrid : Array Float :=
   Id.run do
     let mut arr := Array.mkEmpty (128 * 128)
     for i in [0:128] do
-      let r := warpedFloats[i]!
       for j in [0:128] do
-        let v := warpedFloats[j]!
-        let y :=
-          chebEval roughCoeffs 0 r * chebEval cosCoeffs 0 v +
-          chebEval roughCoeffs 11 r * chebEval cosCoeffs 11 v +
-          chebEval roughCoeffs 22 r * chebEval cosCoeffs 22 v +
-          chebEval roughCoeffs 33 r * chebEval cosCoeffs 33 v +
-          chebEval roughCoeffs 44 r * chebEval cosCoeffs 44 v +
-          chebEval roughCoeffs 55 r * chebEval cosCoeffs 55 v
-        arr := arr.push (max y 0.0)
+        arr := arr.push (approxAt i j)
     pure arr
 
 structure EdgeParams where
