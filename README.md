@@ -15,36 +15,46 @@ Variables (from integrate_dfg.glsl in the PR):
 ## Implementation
 
 - **Data Source**: The `thirdparty/sheen_lut_data.txt` contains the blue channel values extracted from the DFG DDS file, forming a 128x128 lookup table.
-- **Fitting Method**: We fit a 2D polynomial of degree 4 using linear least squares optimization.
-- **Output**: An analytical expression expressed symbolically using SymPy-derived equations.
+- **Fitting Method**: We fit `sqrt(LUT)` with a rank-8 separable Chebyshev model, degree 20 per axis, using SVD plus univariate Chebyshev fits.
+- **Output**: A generated analytical shader expression in `sheen_lut_approx.glsl`, plus a Lean4 proof artifact that checks the plausible witness DAG and evaluator.
 
 ## Current Approximation
 
-Derivative of a degree 4 polynomial (15 terms) fitted using least squares, providing MSE ~0.056 for direct shader implementation without LUT lookup.
+The current approximation uses a rank-8, degree-20 separable Chebyshev model in square-root space. The final shader expression is:
 
+```text
+square(max(sum_k ChebR_k(roughness) * ChebC_k(cos_theta), 0.0))
 ```
-10.541436656511*cos_theta**4 - 15.8906606011087*cos_theta**3*r - 17.1488136680321*cos_theta**3 + 10.9806612332594*cos_theta**2*r**2 + 17.9790429861389*cos_theta**2*r + 8.53664845039853*cos_theta**2 + 0.134519806072525*cos_theta*r**3 - 12.0565363127585*cos_theta*r**2 - 3.74737790070742*cos_theta*r - 1.96569854338589*cos_theta - 0.0279244335528505*r**4 - 0.0341913862356636*r**3 + 2.29548431845381*r**2 - 0.149368395647259*r + 0.623898536703856
-```
+
+The generated approximation metrics are:
+
+- Coefficients: 336
+- Mean Squared Error: 0.0000054600
+- Max Absolute Error: 0.1602879545
+- Structural Similarity Index (SSIM): 0.9999983
 
 Where:
 - `r`: Normalized roughness (0 to 1)
 - `cos_theta`: NdotV (cosine of the viewing angle)
 
-Mean Squared Error: 0.05590929665523771
+## Lean proof artifact
+
+`SheenLutProof.lean` converts the fitted rounded-coefficient model into an exact rational Lean4 artifact. It uses a Flowref-style plausible witness DAG: every rank component is represented as a witness node, dependencies point only backward, Lean proves the graph is acyclic, and Lean proves that the witness DAG implements the generated separable Chebyshev expression after clamp-and-square.
+
+Verify the proof and run the smoke executable:
+
+```bash
+lake build sheen-lut-proof
+.lake/build/bin/sheen-lut-proof
+```
 
 ## Usage
 
-Run the approximation:
-
-```bash
-uv run python main.py
-```
-
-This will output the fitted expression and error metrics.
+Use the checked Lean4 artifact and generated GLSL approximation directly.
 
 ## Notes
 
-This polynomial approximation provides a balance of accuracy (MSE 0.0559) and shader efficiency (15 terms, mostly multiplications and additions). Faster and simpler than higher-degree models but with reduced accuracy compared to LUT lookups.
+This approximation replaces the previous direct 2D polynomial fit with a low-rank square-root-space model. The Lean4 proof checks the generated plausible witness DAG and evaluator structure.
 
 ## References
 
