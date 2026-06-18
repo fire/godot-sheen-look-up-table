@@ -3,12 +3,14 @@ import PlausibleWitnessDag
 /-!
 # Mobile Sheen LUT separable Chebyshev witness DAG
 
-Mobile default: rank 4, degree 10, 88 coefficients.
+Mobile default: rank 4, degree 10, 88 coefficients, and a 5-scalar
+branchless left-edge residual correction.
 
 The generated shader expression is a rank-4 separable Chebyshev approximation
 over sqrt-warped inputs. Lean treats the rounded coefficients as the exact
 shader contract and proves that the Flowref-style plausible witness DAG
-computes the same expression as the direct separable specification.
+computes the same expression as the direct separable specification plus the
+fitted residual correction.
 -/
 
 namespace SheenLutProof
@@ -17,6 +19,13 @@ def rankCount : Nat := 4
 def degree : Nat := 10
 def coefficientScale : Nat := 10000000
 def coefficientCount : Nat := rankCount * 2 * (degree + 1)
+def edgeCorrectionScalarCount : Nat := 5
+def totalScalarCount : Nat := coefficientCount + edgeCorrectionScalarCount
+def edgeAmplitude : Rat := (3 : Rat) / 4
+def edgeRough0 : Rat := (85 : Rat) / 100
+def edgeRough1 : Rat := 1
+def edgeCos0 : Rat := (2 : Rat) / 100
+def edgeCos1 : Rat := 0
 
 structure Component where
   rank : Nat
@@ -74,11 +83,24 @@ def rawFromWitnessDag (roughness cosTheta : Rat) : Rat :=
 def clampNonnegative (x : Rat) : Rat :=
   if x < 0 then 0 else x
 
+def clamp01 (x : Rat) : Rat :=
+  if x < 0 then 0 else if x > 1 then 1 else x
+
+def smoothstep (edge0 edge1 x : Rat) : Rat :=
+  let t := clamp01 ((x - edge0) / (edge1 - edge0))
+  t * t * (3 - 2 * t)
+
+def edgeWeight (roughness cosTheta : Rat) : Rat :=
+  smoothstep edgeRough0 edgeRough1 roughness * smoothstep edgeCos0 edgeCos1 cosTheta
+
+def edgeCorrection (roughness cosTheta : Rat) : Rat :=
+  edgeAmplitude * edgeWeight roughness cosTheta
+
 def sheenApproxSpec (roughness cosTheta : Rat) : Rat :=
-  clampNonnegative (rawSpec roughness cosTheta)
+  clampNonnegative (rawSpec roughness cosTheta + edgeCorrection roughness cosTheta)
 
 def sheenApproxFromWitnessDag (roughness cosTheta : Rat) : Rat :=
-  clampNonnegative (rawFromWitnessDag roughness cosTheta)
+  clampNonnegative (rawFromWitnessDag roughness cosTheta + edgeCorrection roughness cosTheta)
 
 def gridCoord (idx : Nat) : Rat := (idx : Rat) / 127
 
@@ -90,6 +112,7 @@ def lutApproxAt (roughnessIdx cosThetaIdx : Nat) : Rat :=
 
 theorem components_length : components.length = rankCount := by native_decide
 theorem mobile_coefficient_count : coefficientCount = 88 := by native_decide
+theorem total_scalar_count : totalScalarCount = 93 := by native_decide
 theorem components_degree_ok : components.all componentDegreeOk = true := by native_decide
 theorem witnessDag_length : witnessDag.length = components.length := by native_decide
 

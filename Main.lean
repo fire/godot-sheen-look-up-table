@@ -52,6 +52,100 @@ def approxAt (roughnessIdx cosThetaIdx : Nat) : Float :=
     acc + chebEval roughCoeffs offset r * chebEval cosCoeffs offset v) 0.0
   max y 0.0
 
+structure EdgeParams where
+  rough0 : Float
+  rough1 : Float
+  cos0 : Float
+  cos1 : Float
+  deriving Repr
+
+structure EdgeFit where
+  params : EdgeParams
+  amplitude : Float
+  mse : Float
+  maxErr : Float
+  maxIdx : Nat
+  deriving Repr
+
+instance : Inhabited EdgeParams where
+  default := { rough0 := 0.75, rough1 := 1.0, cos0 := 0.08, cos1 := 0.0 }
+
+instance : Inhabited EdgeFit where
+  default := { params := default, amplitude := 0.0, mse := 0.0, maxErr := 0.0, maxIdx := 0 }
+
+def smoothstep (edge0 edge1 x : Float) : Float :=
+  let t := clamp01 ((x - edge0) / (edge1 - edge0))
+  t * t * (3.0 - 2.0 * t)
+
+def edgeWeight (p : EdgeParams) (roughness cosTheta : Float) : Float :=
+  smoothstep p.rough0 p.rough1 roughness * smoothstep p.cos0 p.cos1 cosTheta
+
+def edgeParamCandidates : Array EdgeParams := #[
+  { rough0 := 0.55, rough1 := 0.95, cos0 := 0.02, cos1 := 0.0 },
+  { rough0 := 0.55, rough1 := 0.95, cos0 := 0.04, cos1 := 0.0 },
+  { rough0 := 0.55, rough1 := 0.95, cos0 := 0.08, cos1 := 0.0 },
+  { rough0 := 0.55, rough1 := 0.95, cos0 := 0.12, cos1 := 0.0 },
+  { rough0 := 0.65, rough1 := 0.95, cos0 := 0.02, cos1 := 0.0 },
+  { rough0 := 0.65, rough1 := 0.95, cos0 := 0.04, cos1 := 0.0 },
+  { rough0 := 0.65, rough1 := 0.95, cos0 := 0.08, cos1 := 0.0 },
+  { rough0 := 0.65, rough1 := 0.95, cos0 := 0.12, cos1 := 0.0 },
+  { rough0 := 0.75, rough1 := 1.0, cos0 := 0.02, cos1 := 0.0 },
+  { rough0 := 0.75, rough1 := 1.0, cos0 := 0.04, cos1 := 0.0 },
+  { rough0 := 0.75, rough1 := 1.0, cos0 := 0.08, cos1 := 0.0 },
+  { rough0 := 0.75, rough1 := 1.0, cos0 := 0.12, cos1 := 0.0 },
+  { rough0 := 0.85, rough1 := 1.0, cos0 := 0.02, cos1 := 0.0 },
+  { rough0 := 0.85, rough1 := 1.0, cos0 := 0.04, cos1 := 0.0 },
+  { rough0 := 0.85, rough1 := 1.0, cos0 := 0.08, cos1 := 0.0 },
+  { rough0 := 0.85, rough1 := 1.0, cos0 := 0.12, cos1 := 0.0 }]
+
+def edgeAmplitudeCandidates : Array Float := #[
+  -1.00, -0.75, -0.50, -0.25, 0.25, 0.50, 0.75, 1.00,
+  1.25, 1.50, 1.75, 2.00, 2.25, 2.50, 2.75, 3.00, 3.25, 3.50]
+
+def edgeCandidateCount : Nat := edgeParamCandidates.size * edgeAmplitudeCandidates.size
+
+def edgeCandidateAt (idx : Nat) : EdgeParams × Float :=
+  let p := edgeParamCandidates[idx / edgeAmplitudeCandidates.size]!
+  let amp := edgeAmplitudeCandidates[idx % edgeAmplitudeCandidates.size]!
+  (p, amp)
+
+def evaluateEdgeFit (lut : Array Float) (p : EdgeParams) (amp : Float) : EdgeFit :=
+  let (sumSq, maxErr, maxIdx) := (List.range 128).foldl (fun acc i =>
+    (List.range 128).foldl (fun (sumSq, maxErr, maxIdx) j =>
+      let idx := i * 128 + j
+      let roughness := (Float.ofNat i) / 127.0
+      let cosTheta := (Float.ofNat j) / 127.0
+      let y := max (approxAt i j + amp * edgeWeight p roughness cosTheta) 0.0
+      let err := Float.abs (lut[idx]! - y)
+      if err > maxErr then (sumSq + err * err, err, idx)
+      else (sumSq + err * err, maxErr, maxIdx)) acc) (0.0, 0.0, 0)
+  { params := p, amplitude := amp, mse := sumSq / Float.ofNat (128 * 128),
+    maxErr := maxErr, maxIdx := maxIdx }
+
+def chooseBetter (a b : EdgeFit) : EdgeFit :=
+  if a.maxErr < b.maxErr then a
+  else if b.maxErr < a.maxErr then b
+  else if a.mse <= b.mse then a
+  else b
+
+def fitEdgeCorrection (lut : Array Float) : IO (EdgeFit × PlausibleWitnessDag.TraceEntry) := do
+  let levels : Array PlausibleWitnessDag.Level := #[
+    { idx := 0, walkSteps := edgeCandidateCount, finBound := 256, numInst := 64 }]
+  let readback : Nat → PlausibleWitnessDag.Readback EdgeFit := fun walkSteps =>
+    let count := min walkSteps edgeCandidateCount
+    let seedPair := edgeCandidateAt 0
+    let seed := evaluateEdgeFit lut seedPair.1 seedPair.2
+    let best := (List.range count).foldl (fun best idx =>
+      let pair := edgeCandidateAt idx
+      chooseBetter best (evaluateEdgeFit lut pair.1 pair.2)) seed
+    { value := best, found := true, witnessIdx := best.maxIdx, budgetHit := false }
+  let (fit, _, trace) ← PlausibleWitnessDag.resolve
+    "left-edge residual correction"
+    (fun _ idx => idx < edgeCandidateCount)
+    readback
+    levels
+  pure (fit, trace)
+
 def parseGroundTruth (s : String) : Except String (Array Float) := do
   let json ← Lean.Json.parse s
   let arr ← json.getArr?
@@ -80,6 +174,7 @@ def checkGroundTruth : IO Unit := do
         maxErr := err
         maxIdx := idx
   mse := mse / Float.ofNat (128 * 128)
+  let (fit, trace) ← fitEdgeCorrection lut
   IO.println s!"ground truth file: {lutPath}"
   IO.println s!"rank components: {components.length}"
   IO.println s!"degree per factor: {degree}"
@@ -89,6 +184,12 @@ def checkGroundTruth : IO Unit := do
   IO.println s!"DAG acyclic: {witnessDag.all (fun n => n.deps.all (fun d => d < n.idx))}"
   IO.println s!"ground-truth MSE: {mse}"
   IO.println s!"ground-truth max abs error: {maxErr} at row {maxIdx / 128}, col {maxIdx % 128}"
+  IO.println s!"edge fit trace: {reprStr trace}"
+  IO.println s!"edge correction amplitude: {fit.amplitude}"
+  IO.println s!"edge correction rough smoothstep: {fit.params.rough0} -> {fit.params.rough1}"
+  IO.println s!"edge correction cos smoothstep: {fit.params.cos0} -> {fit.params.cos1}"
+  IO.println s!"edge-corrected MSE: {fit.mse}"
+  IO.println s!"edge-corrected max abs error: {fit.maxErr} at row {fit.maxIdx / 128}, col {fit.maxIdx % 128}"
 
 end SheenLutMobileCheck
 
