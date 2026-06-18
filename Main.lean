@@ -198,21 +198,16 @@ def parseGroundTruth (s : String) : Except String (Array Float) := do
     let n ← value.getNum?
     Except.ok (acc.push n.toFloat)
 
-/-- Map a value in [0,1] to an RGB false-colour using a blue→cyan→green→yellow→red gradient. -/
+/-- Map a value in [0,1] to RGB using a smooth turbo-style colormap.
+    Polynomial approximation of the Google Turbo palette — no hard kinks. -/
 def falseColor (t : Float) : (Nat × Nat × Nat) :=
   let t := max 0.0 (min 1.0 t)
-  if t < 0.25 then
-    let s := t / 0.25
-    (0, (s * 255.0).toUInt8.toNat, 255)
-  else if t < 0.5 then
-    let s := (t - 0.25) / 0.25
-    (0, 255, ((1.0 - s) * 255.0).toUInt8.toNat)
-  else if t < 0.75 then
-    let s := (t - 0.5) / 0.25
-    ((s * 255.0).toUInt8.toNat, 255, 0)
-  else
-    let s := (t - 0.75) / 0.25
-    (255, ((1.0 - s) * 255.0).toUInt8.toNat, 0)
+  -- Turbo colormap polynomial coefficients (R, G, B) from the reference implementation
+  let r :=   0.13572138 + t * ( 4.61539260 + t * (-42.66032258 + t * ( 132.13108234 + t * (-152.94239396 + t * 59.28637943))))
+  let g :=   0.09140261 + t * ( 2.19418839 + t * (  4.84296658 + t * ( -14.18503333 + t * (   4.27729857 + t *  2.82956604))))
+  let b :=   0.10667330 + t * (12.64194608 + t * (-60.58694580 + t * ( 110.46943090 + t * ( -89.38180175 + t * 26.22664274))))
+  let clamp (x : Float) : Nat := (max 0.0 (min 1.0 x) * 255.0).toUInt8.toNat
+  (clamp r, clamp g, clamp b)
 
 def writePpm (path : System.FilePath) (pixels : Array (Nat × Nat × Nat)) (w h : Nat) : IO Unit := do
   let mut lines : Array String := #[s!"P3\n{w} {h}\n255"]
