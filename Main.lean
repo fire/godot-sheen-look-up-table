@@ -274,17 +274,22 @@ def renderMatrix (lut approxGrid : Array Float) (fit : EdgeFit) : IO Unit := do
   writePpm "rendered/_bl.ppm" blPixels 128 128
   writePpm "rendered/_br.ppm" brPixels 128 128
   -- Compose with ImageMagick: +append = horizontal, -append = vertical
-  -- Label each cell before composing
-  let label : String → String → String → IO Unit := fun src lbl dst =>
+  -- Scale each cell up 4x, add a solid label bar below, then compose
+  -- Cell: 128x128 -> 512x512, label bar: 512x32
+  let labelCell : String → String → String → IO Unit := fun src lbl dst =>
     runConvert #[src,
-      "-fill", "white", "-stroke", "black", "-strokewidth", "1",
-      "-font", "DejaVu-Sans-Bold", "-pointsize", "11",
-      "-gravity", "NorthWest", "-annotate", "+3+3", lbl,
+      "-scale", "512x512",
+      "-gravity", "South",
+      "-background", "black",
+      "-splice", "0x32",           -- add 32px strip at bottom
+      "-fill", "white",
+      "-font", "DejaVu-Sans-Bold", "-pointsize", "20",
+      "-gravity", "South", "-annotate", "+0+6", lbl,
       dst]
-  label "rendered/_tl.ppm" "Ground truth"        "rendered/_tl_l.ppm"
-  label "rendered/_tr.ppm" "Best approx (EC)"    "rendered/_tr_l.ppm"
-  label "rendered/_bl.ppm" "Ground truth (false)" "rendered/_bl_l.ppm"
-  label "rendered/_br.ppm" "Best approx (false)"  "rendered/_br_l.ppm"
+  labelCell "rendered/_tl.ppm" "Ground truth"         "rendered/_tl_l.ppm"
+  labelCell "rendered/_tr.ppm" "Best approx (EC)"     "rendered/_tr_l.ppm"
+  labelCell "rendered/_bl.ppm" "Ground truth (false)"  "rendered/_bl_l.ppm"
+  labelCell "rendered/_br.ppm" "Best approx (false)"   "rendered/_br_l.ppm"
   runConvert #["rendered/_tl_l.ppm", "rendered/_tr_l.ppm", "+append", "rendered/_top.ppm"]
   runConvert #["rendered/_bl_l.ppm", "rendered/_br_l.ppm", "+append", "rendered/_bot.ppm"]
   runConvert #["rendered/_top.ppm", "rendered/_bot.ppm", "-append", "rendered/matrix_2x2.png"]
