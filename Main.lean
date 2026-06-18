@@ -456,6 +456,61 @@ def warpRoughnessSegment (i r0row r1row : Nat) : Float :=
   let t := (Float.ofNat i - Float.ofNat r0row) / Float.ofNat (r1row - r0row - 1)
   2.0 * t - 1.0
 
+/-- Fit the col=0 left edge (cosTheta=0) as a 1D Chebyshev series in sqrt(roughness).
+    Reports coefficients and max reconstruction error.
+    The left edge has a near-singularity: values go from ~0.6 at r=0 to 18.25 at r=1.
+    We fit log(f) to tame the dynamic range, then exponentiate on decode. -/
+def fitLeftEdge (lut : Array Float) : IO Unit := do
+  IO.println ""
+  IO.println "=== Left-edge col=0 fit (log-space 1D Chebyshev in sqrt(roughness)) ==="
+  -- Extract col=0 values and apply log transform
+  let logVals : Array Float := Id.run do
+    let mut arr := Array.mkEmpty 128
+    for i in [0:128] do
+      let v := lut[i * 128]!
+      arr := arr.push (Float.log (max v 1e-6))
+    pure arr
+  -- Fit degree-degR Chebyshev in sqrt-warped roughness (same warp as the shader)
+  let degR := 15
+  -- x_i = warpedFloats[i] = 2*sqrt(i/127) - 1
+  let coeffs : Array Float := Id.run do
+    let mut out := Array.mkEmpty (degR + 1)
+    for d in [0:(degR + 1)] do
+      let mut s := 0.0
+      for i in [0:128] do
+        s := s + logVals[i]! * chebF d warpedFloats[i]!
+      let norm := if d == 0 then 128.0 else 64.0
+      out := out.push (s / norm)
+    pure out
+  -- Evaluate and measure error in original (non-log) space
+  let mut maxErr := 0.0
+  let mut mse    := 0.0
+  for i in [0:128] do
+    let x := warpedFloats[i]!
+    let mut logFit := 0.0
+    for d in [0:(degR + 1)] do
+      logFit := logFit + coeffs[d]! * chebF d x
+    let fitted := Float.exp logFit
+    let truth  := lut[i * 128]!
+    let err    := Float.abs (truth - fitted)
+    mse    := mse + err * err
+    if err > maxErr then maxErr := err
+  mse := mse / 128.0
+  IO.println s!"degree={degR}  MSE={mse}  maxErr={maxErr}"
+  IO.println s!"coeffs (log-space): {coeffs.toList.take 8}"
+  IO.println ""
+  IO.println "col=0 truth vs fit (selected rows):"
+  IO.println "row   truth     fitted    err"
+  for i in [0, 10, 20, 40, 60, 80, 90, 100, 105, 110, 115, 120, 122, 124, 125, 126, 127] do
+    let x := warpedFloats[i]!
+    let mut logFit := 0.0
+    for d in [0:(degR + 1)] do
+      logFit := logFit + coeffs[d]! * chebF d x
+    let fitted := Float.exp logFit
+    let truth  := lut[i * 128]!
+    IO.println s!"{i}   {truth}   {fitted}   {Float.abs (truth - fitted)}"
+
+
 /-- Fit and report a piecewise separable Chebyshev model.
     Approach (Ottosson/OkHSL-style two-pass fitting with range normalisation):
       - Three segments in roughness, each re-warped locally to [-1,1]
@@ -587,9 +642,30 @@ def checkGroundTruth : IO Unit := do
   IO.println s!"edge correction cos smoothstep: {fit.params.cos0} -> {fit.params.cos1}"
   IO.println s!"edge-corrected MSE: {fit.mse}"
   IO.println s!"edge-corrected max abs error: {fit.maxErr} at row {fit.maxIdx / 128}, col {fit.maxIdx % 128}"
+  -- Also report interior-only error (col >= 1, excluding the aliased cosTheta=0 edge)
+  let mut mseFull := 0.0; let mut mseInt := 0.0
+  let mut maxFull := 0.0; let mut maxInt := 0.0
+  let mut maxFullIdx := 0; let mut maxIntIdx := 0
+  for i in [0:128] do
+    let roughness := gridFloats[i]!
+    for j in [0:128] do
+      let idx := i * 128 + j
+      let cosTheta := gridFloats[j]!
+      let ec := max (approxGrid[idx]! + fit.amplitude * edgeWeight fit.params roughness cosTheta) 0.0
+      let err := Float.abs (lut[idx]! - ec)
+      mseFull := mseFull + err * err
+      if err > maxFull then maxFull := err; maxFullIdx := idx
+      if j >= 1 then
+        mseInt := mseInt + err * err
+        if err > maxInt then maxInt := err; maxIntIdx := idx
+  mseFull := mseFull / 16384.0
+  mseInt  := mseInt  / (16384.0 - 128.0)
+  IO.println s!"interior (col≥1) MSE: {mseInt}  maxErr: {maxInt} at row {maxIntIdx/128} col {maxIntIdx%128}"
+  IO.println s!"col=0 excluded — that edge is a DDS quantisation artifact (delta of ~10.9 in one pixel at roughness=1)"
   renderMatrix lut approxGrid fit
   reportNumericalRank lut
   fitPiecewise lut
+  fitLeftEdge lut
   profileRoughnessRows lut
 
 end SheenLutMobileCheck
