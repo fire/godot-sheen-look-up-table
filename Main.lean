@@ -376,6 +376,17 @@ def checkGroundTruth : IO Unit := do
         "rendered/lut_triptych_render.png"] }
     _ ← IO.Process.run montageArgs
     IO.println "wrote rendered/lut_triptych_render.png  (ground truth | approx-EC)"
+    -- 2-panel false-colour montage: raw Chebyshev error | edge-corrected error
+    let fcArgs : IO.Process.SpawnArgs := {
+      cmd := "convert",
+      args := #[
+        "rendered/comparison_difference_false_color.ppm",
+        "rendered/edge_corrected_difference_false_color.ppm",
+        "+append",
+        "-scale", "256x128",
+        "rendered/false_color_comparison.png"] }
+    _ ← IO.Process.run fcArgs
+    IO.println "wrote rendered/false_color_comparison.png  (raw error | EC error)"
   | .error _ => pure ()
 
 end SheenLutMobileCheck
