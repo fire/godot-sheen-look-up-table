@@ -3,10 +3,10 @@ import PlausibleWitnessDag
 /-!
 # Mobile Sheen LUT separable Chebyshev witness DAG
 
-Mobile default: rank 4, degree 10, 88 coefficients, and a 5-scalar
+Mobile default: rank 6, degree 10, 132 coefficients, and a 5-scalar
 branchless left-edge residual correction.
 
-The generated shader expression is a rank-4 separable Chebyshev approximation
+The generated shader expression is a rank-6 separable Chebyshev approximation
 over sqrt-warped inputs. Lean treats the rounded coefficients as the exact
 shader contract and proves that the Flowref-style plausible witness DAG
 computes the same expression as the direct separable specification plus the
@@ -15,7 +15,7 @@ fitted residual correction.
 
 namespace SheenLutProof
 
-def rankCount : Nat := 4
+def rankCount : Nat := 6
 def degree : Nat := 10
 def coefficientScale : Nat := 10000000
 def coefficientCount : Nat := rankCount * 2 * (degree + 1)
@@ -58,7 +58,9 @@ def components : List Component := [
   { rank := 0, roughCoeffs := [(27912873 : Rat) / 10000000, (11004930 : Rat) / 10000000, (3527033 : Rat) / 10000000, (-7157665 : Rat) / 10000000, (-7377641 : Rat) / 10000000, (-7450664 : Rat) / 10000000, (-7371704 : Rat) / 10000000, (-3552912 : Rat) / 10000000, (-5355453 : Rat) / 10000000, (-911946 : Rat) / 10000000, (-3028637 : Rat) / 10000000], cosThetaCoeffs := [(16559777 : Rat) / 10000000, (-14487330 : Rat) / 10000000, (8329552 : Rat) / 10000000, (-3543717 : Rat) / 10000000, (-3070446 : Rat) / 10000000, (3737930 : Rat) / 10000000, (-1420418 : Rat) / 10000000, (-307764 : Rat) / 10000000, (784579 : Rat) / 10000000, (-550076 : Rat) / 10000000, (230463 : Rat) / 10000000] },
   { rank := 1, roughCoeffs := [(-33873396 : Rat) / 10000000, (-21308879 : Rat) / 10000000, (-2569030 : Rat) / 10000000, (-953685 : Rat) / 10000000, (2617234 : Rat) / 10000000, (1089591 : Rat) / 10000000, (-1977728 : Rat) / 10000000, (372126 : Rat) / 10000000, (-4496663 : Rat) / 10000000, (176551 : Rat) / 10000000, (-3735703 : Rat) / 10000000], cosThetaCoeffs := [(9652329 : Rat) / 10000000, (-9588539 : Rat) / 10000000, (6478910 : Rat) / 10000000, (-2727923 : Rat) / 10000000, (-1903868 : Rat) / 10000000, (2454054 : Rat) / 10000000, (-985806 : Rat) / 10000000, (-137771 : Rat) / 10000000, (465832 : Rat) / 10000000, (-334964 : Rat) / 10000000, (141780 : Rat) / 10000000] },
   { rank := 2, roughCoeffs := [(-3790376 : Rat) / 10000000, (17168489 : Rat) / 10000000, (4177498 : Rat) / 10000000, (22808654 : Rat) / 10000000, (16242213 : Rat) / 10000000, (17190674 : Rat) / 10000000, (20450091 : Rat) / 10000000, (8091815 : Rat) / 10000000, (18618028 : Rat) / 10000000, (1949892 : Rat) / 10000000, (12057677 : Rat) / 10000000], cosThetaCoeffs := [(7285403 : Rat) / 10000000, (-8299564 : Rat) / 10000000, (5822120 : Rat) / 10000000, (-3161901 : Rat) / 10000000, (-221611 : Rat) / 10000000, (1228724 : Rat) / 10000000, (-781959 : Rat) / 10000000, (226701 : Rat) / 10000000, (31689 : Rat) / 10000000, (-68242 : Rat) / 10000000, (36560 : Rat) / 10000000] },
-  { rank := 3, roughCoeffs := [(-24447337 : Rat) / 10000000, (-23174392 : Rat) / 10000000, (-13839326 : Rat) / 10000000, (20444 : Rat) / 10000000, (2462517 : Rat) / 10000000, (4449870 : Rat) / 10000000, (5823487 : Rat) / 10000000, (2554432 : Rat) / 10000000, (5241216 : Rat) / 10000000, (668309 : Rat) / 10000000, (3272116 : Rat) / 10000000], cosThetaCoeffs := [(1695026 : Rat) / 10000000, (1462894 : Rat) / 10000000, (-1831281 : Rat) / 10000000, (727207 : Rat) / 10000000, (-822644 : Rat) / 10000000, (518821 : Rat) / 10000000, (-4243 : Rat) / 10000000, (-266691 : Rat) / 10000000, (275761 : Rat) / 10000000, (-163480 : Rat) / 10000000, (63374 : Rat) / 10000000] }
+  { rank := 3, roughCoeffs := [(-24447337 : Rat) / 10000000, (-23174392 : Rat) / 10000000, (-13839326 : Rat) / 10000000, (20444 : Rat) / 10000000, (2462517 : Rat) / 10000000, (4449870 : Rat) / 10000000, (5823487 : Rat) / 10000000, (2554432 : Rat) / 10000000, (5241216 : Rat) / 10000000, (668309 : Rat) / 10000000, (3272116 : Rat) / 10000000], cosThetaCoeffs := [(1695026 : Rat) / 10000000, (1462894 : Rat) / 10000000, (-1831281 : Rat) / 10000000, (727207 : Rat) / 10000000, (-822644 : Rat) / 10000000, (518821 : Rat) / 10000000, (-4243 : Rat) / 10000000, (-266691 : Rat) / 10000000, (275761 : Rat) / 10000000, (-163480 : Rat) / 10000000, (63374 : Rat) / 10000000] },
+  { rank := 4, roughCoeffs := [(136697 : Rat) / 10000000, (-258838 : Rat) / 10000000, (318529 : Rat) / 10000000, (-430466 : Rat) / 10000000, (161557 : Rat) / 10000000, (201029 : Rat) / 10000000, (-75291 : Rat) / 10000000, (357902 : Rat) / 10000000, (-443196 : Rat) / 10000000, (195201 : Rat) / 10000000, (-505564 : Rat) / 10000000], cosThetaCoeffs := [(-795575 : Rat) / 10000000, (1688233 : Rat) / 10000000, (-1873883 : Rat) / 10000000, (1976576 : Rat) / 10000000, (-1766518 : Rat) / 10000000, (1162294 : Rat) / 10000000, (-331454 : Rat) / 10000000, (-301844 : Rat) / 10000000, (544544 : Rat) / 10000000, (-414057 : Rat) / 10000000, (206675 : Rat) / 10000000] },
+  { rank := 5, roughCoeffs := [(-204200 : Rat) / 10000000, (316130 : Rat) / 10000000, (-529627 : Rat) / 10000000, (866140 : Rat) / 10000000, (-276529 : Rat) / 10000000, (-377276 : Rat) / 10000000, (131480 : Rat) / 10000000, (-653264 : Rat) / 10000000, (817316 : Rat) / 10000000, (-356367 : Rat) / 10000000, (923918 : Rat) / 10000000], cosThetaCoeffs := [(-649836 : Rat) / 10000000, (1651143 : Rat) / 10000000, (-824905 : Rat) / 10000000, (822321 : Rat) / 10000000, (67458 : Rat) / 10000000, (-1138815 : Rat) / 10000000, (1233045 : Rat) / 10000000, (-706998 : Rat) / 10000000, (63470 : Rat) / 10000000, (238928 : Rat) / 10000000, (-242348 : Rat) / 10000000] }
 ]
 
 def componentDegreeOk (component : Component) : Bool :=
@@ -111,8 +113,8 @@ def lutApproxAt (roughnessIdx cosThetaIdx : Nat) : Rat :=
   sheenApproxFromWitnessDag (warpedGridCoord roughnessIdx) (warpedGridCoord cosThetaIdx)
 
 theorem components_length : components.length = rankCount := by native_decide
-theorem mobile_coefficient_count : coefficientCount = 88 := by native_decide
-theorem total_scalar_count : totalScalarCount = 93 := by native_decide
+theorem mobile_coefficient_count : coefficientCount = 132 := by native_decide
+theorem total_scalar_count : totalScalarCount = 137 := by native_decide
 theorem components_degree_ok : components.all componentDegreeOk = true := by native_decide
 theorem witnessDag_length : witnessDag.length = components.length := by native_decide
 

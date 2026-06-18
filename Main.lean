@@ -16,7 +16,13 @@ def roughCoeffs : Array Float := #[
   2.28086540, 1.62422130, 1.71906740, 2.04500910, 0.809181500,
   1.86180280, 0.194989200, 1.20576770, -2.44473370, -2.31743920,
   -1.38393260, 0.00204440000, 0.246251700, 0.444987000, 0.582348700,
-  0.255443200, 0.524121600, 0.0668309000, 0.327211600]
+  0.255443200, 0.524121600, 0.0668309000, 0.327211600,
+  0.01366972759, -0.02588381493, 0.03185285703, -0.04304663088,
+  0.01615568576, 0.02010289788, -0.007529135695, 0.03579024574,
+  -0.04431958446, 0.01952014749, -0.05055638609, -0.02042002182,
+  0.03161301833, -0.05296272256, 0.08661400775, -0.02765287824,
+  -0.03772763986, 0.01314804185, -0.06532637041, 0.08173161275,
+  -0.03563674660, 0.09239182289]
 
 def cosCoeffs : Array Float := #[
   1.65597770, -1.44873300, 0.832955200, -0.354371700, -0.307044600,
@@ -27,7 +33,13 @@ def cosCoeffs : Array Float := #[
   -0.316190100, -0.0221611000, 0.122872400, -0.0781959000, 0.0226701000,
   0.00316890000, -0.00682420000, 0.00365600000, 0.169502600, 0.146289400,
   -0.183128100, 0.0727207000, -0.0822644000, 0.0518821000, -0.000424300000,
-  -0.0266691000, 0.0275761000, -0.0163480000, 0.00633740000]
+  -0.0266691000, 0.0275761000, -0.0163480000, 0.00633740000,
+  -0.07955750455, 0.1688233010, -0.1873883095, 0.1976576456,
+  -0.1766518460, 0.1162294198, -0.03314542398, -0.03018441146,
+  0.05445439845, -0.04140566257, 0.02066747508, -0.06498364806,
+  0.1651142801, -0.08249048626, 0.08223206144, 0.006745825693,
+  -0.1138815223, 0.1233045276, -0.07069977333, 0.006346998157,
+  0.02389275686, -0.02423478205]
 
 def clamp01 (x : Float) : Float := max 0.0 (min 1.0 x)
 
@@ -70,7 +82,9 @@ def approxAt (roughnessIdx cosThetaIdx : Nat) : Float :=
     chebEval roughCoeffs 0 r * chebEval cosCoeffs 0 v +
     chebEval roughCoeffs 11 r * chebEval cosCoeffs 11 v +
     chebEval roughCoeffs 22 r * chebEval cosCoeffs 22 v +
-    chebEval roughCoeffs 33 r * chebEval cosCoeffs 33 v
+    chebEval roughCoeffs 33 r * chebEval cosCoeffs 33 v +
+    chebEval roughCoeffs 44 r * chebEval cosCoeffs 44 v +
+    chebEval roughCoeffs 55 r * chebEval cosCoeffs 55 v
   max y 0.0
 
 /-- Precompute the 128×128 grid of approxAt values once, reused across all edge candidates. -/
@@ -85,7 +99,9 @@ def buildApproxGrid : Array Float :=
           chebEval roughCoeffs 0 r * chebEval cosCoeffs 0 v +
           chebEval roughCoeffs 11 r * chebEval cosCoeffs 11 v +
           chebEval roughCoeffs 22 r * chebEval cosCoeffs 22 v +
-          chebEval roughCoeffs 33 r * chebEval cosCoeffs 33 v
+          chebEval roughCoeffs 33 r * chebEval cosCoeffs 33 v +
+          chebEval roughCoeffs 44 r * chebEval cosCoeffs 44 v +
+          chebEval roughCoeffs 55 r * chebEval cosCoeffs 55 v
         arr := arr.push (max y 0.0)
     pure arr
 
