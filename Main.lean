@@ -331,27 +331,39 @@ def normalize (v : Array Float) : Array Float × Float :=
   if n < 1e-15 then (v, 0.0)
   else (v.map (· / n), n)
 
-/-- Deflate rank-1 component sigma*u*vᵀ from A. -/
+/-- Deflate rank-1 component sigma*u*vᵀ from A (nRows×128). -/
 def deflate (A : Array Float) (u v : Array Float) (sigma : Float) : Array Float :=
+  let nRows := A.size / 128
   Id.run do
     let mut B := A
-    for i in [0:128] do
+    for i in [0:nRows] do
       for j in [0:128] do
         B := B.set! (i * 128 + j) (B[i * 128 + j]! - sigma * u[i]! * v[j]!)
     pure B
 
-/-- Power iteration: largest singular value + vectors of A, after `iters` steps. -/
+/-- Power iteration: largest singular value + vectors of A (nRows×128), after `iters` steps. -/
 def powerIter (A : Array Float) (iters : Nat) : Float × Array Float × Array Float :=
+  let nRows := A.size / 128
   Id.run do
     let (v0, _) := normalize (Array.replicate 128 1.0)
     let mut v := v0
-    let mut u := Array.replicate 128 0.0
+    let mut u := Array.replicate nRows 0.0
     let mut sigma := 0.0
     for _ in [0:iters] do
-      let av := matVec A v
-      let (u', _) := normalize av
+      -- u = A*v, normalise
+      let mut au := Array.replicate nRows 0.0
+      for i in [0:nRows] do
+        let mut s := 0.0
+        for j in [0:128] do
+          s := s + A[i * 128 + j]! * v[j]!
+        au := au.set! i s
+      let (u', _) := normalize au
       u := u'
-      let atv := matTVec A u
+      -- v = Aᵀ*u, normalise
+      let mut atv := Array.replicate 128 0.0
+      for i in [0:nRows] do
+        for j in [0:128] do
+          atv := atv.set! j (atv[j]! + A[i * 128 + j]! * u[i]!)
       let (v', s) := normalize atv
       v := v'
       sigma := s
@@ -378,6 +390,164 @@ def reportNumericalRank (lut : Array Float) : IO Unit := do
     A := deflate A u v sigma
     if k == 39 then
       IO.println "Numerical rank (sigma > 1e-6): >= 40"
+
+/-- Evaluate the d-th Chebyshev polynomial at x using Float arithmetic. -/
+def chebF : Nat → Float → Float
+  | 0, _ => 1.0
+  | 1, x => x
+  | n + 2, x =>
+    Id.run do
+      let mut t0 := 1.0
+      let mut t1 := x
+      for _ in [0:n+1] do
+        let t2 := 2.0 * x * t1 - t0
+        t0 := t1
+        t1 := t2
+      pure t1
+
+/-- Extract a row-slice of the LUT: rows [r0, r1), all 128 cosTheta columns.
+    Returns a flat array of size (r1-r0)*128. -/
+def lutSlice (lut : Array Float) (r0 r1 : Nat) : Array Float :=
+  Id.run do
+    let rows := r1 - r0
+    let mut out := Array.mkEmpty (rows * 128)
+    for i in [0:rows] do
+      for j in [0:128] do
+        out := out.push lut[(r0 + i) * 128 + j]!
+    pure out
+
+/-- Evaluate a rank-k separable Chebyshev model on a (rows×128) grid.
+    roughCoeffs: k*(degR+1) coefficients, cosCoeffs: k*(degC+1) coefficients.
+    roughWarped: precomputed warped roughness for each row in [r0,r1).
+    Returns flat array of size rows*128. -/
+def evalPiecewise (roughCoeffs cosCoeffs : Array Float) (rank degR degC : Nat)
+    (roughWarped : Array Float) : Array Float :=
+  let rows := roughWarped.size
+  Id.run do
+    let mut out := Array.mkEmpty (rows * 128)
+    for i in [0:rows] do
+      let r := roughWarped[i]!
+      for j in [0:128] do
+        let v := warpedFloats[j]!
+        let mut y := 0.0
+        for k in [0:rank] do
+          y := y + chebEval roughCoeffs (k * (degR + 1)) r *
+                   chebEval cosCoeffs  (k * (degC + 1)) v
+        out := out.push (max y 0.0)
+    pure out
+
+/-- Compute MSE and max absolute error between two flat arrays. -/
+def errorStats (a b : Array Float) : Float × Float × Nat :=
+  Id.run do
+    let mut sumSq  := 0.0
+    let mut maxErr := 0.0
+    let mut maxIdx := 0
+    for i in [0:a.size] do
+      let e := Float.abs (a[i]! - b[i]!)
+      sumSq := sumSq + e * e
+      if e > maxErr then maxErr := e; maxIdx := i
+    let n := (a.size.toFloat)
+    pure (sumSq / n, maxErr, maxIdx)
+
+/-- Warp roughness linearly into [-1,1] within a segment [r0_frac, r1_frac].
+    r0_frac and r1_frac are the fractional row boundaries in [0,1]. -/
+def warpRoughnessSegment (i r0row r1row : Nat) : Float :=
+  -- map row i linearly to [-1, 1] within [r0row, r1row)
+  let t := (Float.ofNat i - Float.ofNat r0row) / Float.ofNat (r1row - r0row - 1)
+  2.0 * t - 1.0
+
+/-- Fit and report a piecewise separable Chebyshev model.
+    Approach (Ottosson/OkHSL-style two-pass fitting with range normalisation):
+      - Three segments in roughness, each re-warped locally to [-1,1]
+      - Segment C divides out a roughness weight w(r) before fitting to
+        handle the 1/(1-r) dynamic range blow-up, then multiplies back on decode
+      - Pass 1: exact cosTheta Chebyshev inner product per row
+      - Pass 2: Chebyshev fit of each cosTheta coefficient in roughness
+    C¹ continuity at segment boundaries is not enforced here (diagnostic only). -/
+def fitPiecewise (lut : Array Float) : IO Unit := do
+  IO.println ""
+  IO.println "=== Piecewise separable Chebyshev fit (OkHSL-style two-pass) ==="
+  -- Segment C weight: reference value at col=0 for each row, used to normalise
+  -- the explosive left-edge growth. Divides before fit, multiplies after.
+  let weightC : Nat → Float := fun i =>
+    -- w(r) ≈ lut[row, 0], the peak value at grazing angle — normalises the row
+    let v := lut[(110 + i) * 128]!
+    if v > 0.001 then v else 1.0
+  let segments : List (String × Nat × Nat × Nat × Nat × Bool) := [
+    -- (name, r0, r1, degR, degC, useWeight)
+    ("A: r=[0.00,0.57)", 0,   73,  5,  7, false),
+    ("B: r=[0.57,0.86)", 73,  110, 7,  9, false),
+    ("C: r=[0.86,1.00]", 110, 128, 9, 10, true)]
+  for (name, r0, r1, degR, degC, useWeight) in segments do
+    let rows := r1 - r0
+    let roughWarped : Array Float := Id.run do
+      let mut arr := Array.mkEmpty rows
+      for i in [0:rows] do
+        arr := arr.push (warpRoughnessSegment (r0 + i) r0 r1)
+      pure arr
+    -- Pass 1: per-row cosTheta Chebyshev coefficients (with optional row normalisation)
+    let perRowCoeffs : Array Float := Id.run do
+      let mut out := Array.mkEmpty (rows * (degC + 1))
+      for i in [0:rows] do
+        let w := if useWeight then weightC i else 1.0
+        for d in [0:(degC + 1)] do
+          let mut s := 0.0
+          for j in [0:128] do
+            s := s + (lut[(r0 + i) * 128 + j]! / w) * chebF d warpedFloats[j]!
+          let norm := if d == 0 then 128.0 else 64.0
+          out := out.push (s / norm)
+      pure out
+    -- Pass 2: Chebyshev fit in roughness for each cosTheta coefficient
+    let roughCoeffs : Array Float := Id.run do
+      let mut out := Array.mkEmpty ((degC + 1) * (degR + 1))
+      for d in [0:(degC + 1)] do
+        for k in [0:(degR + 1)] do
+          let mut s := 0.0
+          for i in [0:rows] do
+            s := s + perRowCoeffs[i * (degC + 1) + d]! * chebF k roughWarped[i]!
+          let norm := if k == 0 then rows.toFloat else rows.toFloat / 2.0
+          out := out.push (s / norm)
+      pure out
+    -- Evaluate
+    let fitted : Array Float := Id.run do
+      let mut out := Array.mkEmpty (rows * 128)
+      for i in [0:rows] do
+        let r := roughWarped[i]!
+        let w := if useWeight then weightC i else 1.0
+        for j in [0:128] do
+          let v := warpedFloats[j]!
+          let mut y := 0.0
+          for d in [0:(degC + 1)] do
+            let mut rc := 0.0
+            for k in [0:(degR + 1)] do
+              rc := rc + roughCoeffs[d * (degR + 1) + k]! * chebF k r
+            y := y + rc * chebF d v
+          out := out.push (max (y * w) 0.0)
+      pure out
+    let slice := lutSlice lut r0 r1
+    let (mse, maxErr, maxIdx) := errorStats slice fitted
+    let maxRow := maxIdx / 128 + r0
+    let maxCol := maxIdx % 128
+    let nCoeffs := (degC + 1) * (degR + 1)
+    IO.println s!"Segment {name}: degR={degR} degC={degC} coeffs={nCoeffs} weight={useWeight}"
+    IO.println s!"  MSE={mse}  maxErr={maxErr} at row={maxRow} col={maxCol}"
+
+/-- Per-roughness-row statistics to identify natural breakpoints for a piecewise fit. -/
+def profileRoughnessRows (lut : Array Float) : IO Unit := do
+  IO.println ""
+  IO.println "=== Per-roughness-row profile ==="
+  IO.println "row   roughness   rowNorm    rowMax    rowMean"
+  for i in [0:128] do
+    let mut rowMax  := 0.0
+    let mut rowSum  := 0.0
+    let mut rowNorm := 0.0
+    for j in [0:128] do
+      let v := lut[i * 128 + j]!
+      if v > rowMax then rowMax := v
+      rowSum  := rowSum  + v
+      rowNorm := rowNorm + v * v
+    let roughness := gridFloats[i]!
+    IO.println s!"{i}  {roughness}  {Float.sqrt rowNorm}  {rowMax}  {rowSum / 128.0}"
 
 def checkGroundTruth : IO Unit := do
   let raw ← IO.FS.readFile lutPath
@@ -419,6 +589,8 @@ def checkGroundTruth : IO Unit := do
   IO.println s!"edge-corrected max abs error: {fit.maxErr} at row {fit.maxIdx / 128}, col {fit.maxIdx % 128}"
   renderMatrix lut approxGrid fit
   reportNumericalRank lut
+  fitPiecewise lut
+  profileRoughnessRows lut
 
 end SheenLutMobileCheck
 
