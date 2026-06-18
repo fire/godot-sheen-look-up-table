@@ -362,7 +362,7 @@ def checkGroundTruth : IO Unit := do
   renderFalseColor lut approxGrid fit
   -- Render true-colour (greyscale) LUT and approximation images
   renderTrueColor lut approxGrid fit
-  -- 4-panel montage: LUT | approx-EC | raw-err | ec-err
+  -- 2-panel montage: ground truth | edge-corrected approx
   let hasConvert ← IO.Process.run { cmd := "which", args := #["convert"] } |>.toBaseIO
   match hasConvert with
   | .ok _ =>
@@ -371,13 +371,11 @@ def checkGroundTruth : IO Unit := do
       args := #[
         "rendered/lut_true_color.ppm",
         "rendered/approx_ec_true_color.ppm",
-        "rendered/comparison_difference_false_color.ppm",
-        "rendered/edge_corrected_difference_false_color.ppm",
         "+append",
-        "-scale", "512x128",
+        "-scale", "256x128",
         "rendered/lut_triptych_render.png"] }
     _ ← IO.Process.run montageArgs
-    IO.println "wrote rendered/lut_triptych_render.png  (LUT | approx-EC | raw-err | ec-err)"
+    IO.println "wrote rendered/lut_triptych_render.png  (ground truth | approx-EC)"
   | .error _ => pure ()
 
 end SheenLutMobileCheck
