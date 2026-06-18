@@ -282,6 +282,8 @@ def renderMatrix (lut approxGrid : Array Float) (fit : EdgeFit) : IO Unit := do
   -- 99th-pct error scale for the diff column
   let sortedErr := errPixels.toList.mergeSort (· ≤ ·) |>.toArray
   let errMax := max (sortedErr[p99]!) 0.001
+  -- Also compute the actual max for the label
+  let errAbsMax := sortedErr[sortedErr.size - 1]!
   -- Six cell pixel arrays (3 columns × 2 rows)
   let tlPixels := lut.map      greyPixel                           -- GT grey
   let tcPixels := approxEC.map greyPixel                           -- approx grey
@@ -305,10 +307,10 @@ def renderMatrix (lut approxGrid : Array Float) (fit : EdgeFit) : IO Unit := do
       dst]
   labelCell "rendered/_tl.ppm" "Ground truth"       "rendered/_tl_l.ppm"
   labelCell "rendered/_tc.ppm" "Best approx (EC)"   "rendered/_tc_l.ppm"
-  labelCell "rendered/_tr.ppm" "Diff (grey)"         "rendered/_tr_l.ppm"
+  labelCell "rendered/_tr.ppm" s!"Diff (grey, p99={errMax})"         "rendered/_tr_l.ppm"
   labelCell "rendered/_bl.ppm" "GT (false colour)"   "rendered/_bl_l.ppm"
   labelCell "rendered/_bc.ppm" "Approx (false)"      "rendered/_bc_l.ppm"
-  labelCell "rendered/_br.ppm" "Diff (false colour)" "rendered/_br_l.ppm"
+  labelCell "rendered/_br.ppm" s!"Diff (false, max={errAbsMax})" "rendered/_br_l.ppm"
   runConvert #["rendered/_tl_l.ppm", "rendered/_tc_l.ppm", "rendered/_tr_l.ppm",
                "+append", "rendered/_top.ppm"]
   runConvert #["rendered/_bl_l.ppm", "rendered/_bc_l.ppm", "rendered/_br_l.ppm",
