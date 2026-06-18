@@ -15,23 +15,22 @@ Variables (from integrate_dfg.glsl in the PR):
 ## Implementation
 
 - **Data Source**: The `thirdparty/sheen_lut_data.txt` contains the blue channel values extracted from the DFG DDS file, forming a 128x128 lookup table.
-- **Fitting Method**: We fit `sqrt(LUT)` with a rank-8 separable Chebyshev model, degree 20 per axis, using SVD plus univariate Chebyshev fits.
+- **Fitting Method**: The mobile expression is a rank-4 separable Chebyshev model, degree 10 per axis, over `sqrt`-warped shader inputs.
 - **Output**: A generated analytical shader expression in `sheen_lut_approx.glsl`, plus a Lean4 proof artifact that checks the plausible witness DAG and evaluator.
 
 ## Current Approximation
 
-The current approximation uses a rank-8, degree-20 separable Chebyshev model in square-root space. The final shader expression is:
+The current approximation uses a rank-4, degree-10 mobile separable Chebyshev model. The final shader expression is:
 
 ```text
-square(max(sum_k ChebR_k(roughness) * ChebC_k(cos_theta), 0.0))
+max(sum_k ChebR_k(2*sqrt(roughness)-1) * ChebC_k(2*sqrt(cos_theta)-1), 0.0)
 ```
 
 The generated approximation metrics are:
 
-- Coefficients: 336
-- Mean Squared Error: 0.0000054600
-- Max Absolute Error: 0.1602879545
-- Structural Similarity Index (SSIM): 0.9999983
+- Coefficients: 88
+- Mean Squared Error: 0.0018611879
+- Max Absolute Error: 2.7023773
 
 Where:
 - `r`: Normalized roughness (0 to 1)
@@ -39,7 +38,11 @@ Where:
 
 ## Lean proof artifact
 
-`SheenLutProof.lean` converts the fitted rounded-coefficient model into an exact rational Lean4 artifact. It uses a Flowref-style plausible witness DAG: every rank component is represented as a witness node, dependencies point only backward, Lean proves the graph is acyclic, and Lean proves that the witness DAG implements the generated separable Chebyshev expression after clamp-and-square.
+`SheenLutProof.lean` converts the rounded-coefficient model into an exact rational Lean4 artifact. It uses a Flowref-style plausible witness DAG: every rank component is represented as a witness node, dependencies point only backward, Lean proves the graph is acyclic, and Lean proves that the witness DAG implements the generated separable Chebyshev expression after clamping negative values to zero.
+
+Lake depends on `https://github.com/fire/plausible-witness-dag`; the proof artifact uses its trace/outcome vocabulary for the witness record.
+
+The smoke executable reads `thirdparty/sheen_lut_data.txt` as ground truth and reports the expression's measured error against that file. The separable expression is the candidate renderer replacement; the LUT text file is the reference.
 
 Verify the proof and run the smoke executable:
 
@@ -54,7 +57,7 @@ Use the checked Lean4 artifact and generated GLSL approximation directly.
 
 ## Notes
 
-This approximation replaces the previous direct 2D polynomial fit with a low-rank square-root-space model. The Lean4 proof checks the generated plausible witness DAG and evaluator structure.
+This approximation is the mobile default: rank 4, degree 10, 88 coefficients, using sqrt-warped inputs and a low-rank separable Chebyshev model. The Lean4 proof checks the generated plausible witness DAG and evaluator structure.
 
 ## References
 
