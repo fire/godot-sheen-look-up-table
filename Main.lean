@@ -297,6 +297,88 @@ def renderMatrix (lut approxGrid : Array Float) (fit : EdgeFit) : IO Unit := do
     rmTemp f
   IO.println "wrote rendered/matrix_2x2.png  (GT grey | approx grey // GT false | approx false)"
 
+/-- Dot product of two flat vectors. -/
+def dot (a b : Array Float) : Float :=
+  Id.run do
+    let mut s := 0.0
+    for i in [0:a.size] do
+      s := s + a[i]! * b[i]!
+    pure s
+
+/-- Matrix-vector product: A (128×128 row-major) times v (length 128), result length 128. -/
+def matVec (A : Array Float) (v : Array Float) : Array Float :=
+  Id.run do
+    let mut out := Array.replicate 128 0.0
+    for i in [0:128] do
+      let mut s := 0.0
+      for j in [0:128] do
+        s := s + A[i * 128 + j]! * v[j]!
+      out := out.set! i s
+    pure out
+
+/-- Transpose-vector product: Aᵀ times v. -/
+def matTVec (A : Array Float) (v : Array Float) : Array Float :=
+  Id.run do
+    let mut out := Array.replicate 128 0.0
+    for i in [0:128] do
+      for j in [0:128] do
+        out := out.set! j (out[j]! + A[i * 128 + j]! * v[i]!)
+    pure out
+
+/-- Normalise a vector; return (unit vector, norm). -/
+def normalize (v : Array Float) : Array Float × Float :=
+  let n := Float.sqrt (dot v v)
+  if n < 1e-15 then (v, 0.0)
+  else (v.map (· / n), n)
+
+/-- Deflate rank-1 component sigma*u*vᵀ from A. -/
+def deflate (A : Array Float) (u v : Array Float) (sigma : Float) : Array Float :=
+  Id.run do
+    let mut B := A
+    for i in [0:128] do
+      for j in [0:128] do
+        B := B.set! (i * 128 + j) (B[i * 128 + j]! - sigma * u[i]! * v[j]!)
+    pure B
+
+/-- Power iteration: largest singular value + vectors of A, after `iters` steps. -/
+def powerIter (A : Array Float) (iters : Nat) : Float × Array Float × Array Float :=
+  Id.run do
+    let (v0, _) := normalize (Array.replicate 128 1.0)
+    let mut v := v0
+    let mut u := Array.replicate 128 0.0
+    let mut sigma := 0.0
+    for _ in [0:iters] do
+      let av := matVec A v
+      let (u', _) := normalize av
+      u := u'
+      let atv := matTVec A u
+      let (v', s) := normalize atv
+      v := v'
+      sigma := s
+    pure (sigma, u, v)
+
+/-- Truncated SVD via power iteration + deflation. Prints singular values and
+    cumulative energy until sigma < 1e-6 or rank 40 is reached. -/
+def reportNumericalRank (lut : Array Float) : IO Unit := do
+  IO.println ""
+  IO.println "=== Numerical rank of the 128×128 LUT matrix ==="
+  IO.println "rank       sigma    cumul energy%   residual%"
+  let totalEnergy := dot lut lut
+  let mut A := lut
+  let mut cumul := 0.0
+  for k in [0:40] do
+    let (sigma, u, v) := powerIter A 60
+    if sigma < 1e-6 then
+      IO.println s!"Numerical rank (sigma > 1e-6): {k}"
+      break
+    cumul := cumul + sigma * sigma
+    let frac  := cumul / totalEnergy * 100.0
+    let resid := (1.0 - cumul / totalEnergy) * 100.0
+    IO.println s!"{k+1}  {sigma}  {frac}%  {resid}%"
+    A := deflate A u v sigma
+    if k == 39 then
+      IO.println "Numerical rank (sigma > 1e-6): >= 40"
+
 def checkGroundTruth : IO Unit := do
   let raw ← IO.FS.readFile lutPath
   let lut ← match parseGroundTruth raw with
@@ -336,6 +418,7 @@ def checkGroundTruth : IO Unit := do
   IO.println s!"edge-corrected MSE: {fit.mse}"
   IO.println s!"edge-corrected max abs error: {fit.maxErr} at row {fit.maxIdx / 128}, col {fit.maxIdx % 128}"
   renderMatrix lut approxGrid fit
+  reportNumericalRank lut
 
 end SheenLutMobileCheck
 
