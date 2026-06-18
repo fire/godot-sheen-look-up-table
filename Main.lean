@@ -227,6 +227,47 @@ def writePpm (path : System.FilePath) (pixels : Array (Nat × Nat × Nat)) (w h 
     lines := lines.push rowStr
   IO.FS.writeFile path (String.intercalate "\n" lines.toList ++ "\n")
 
+/-- Convert a Float in [0,∞) to a greyscale RGB pixel, clamped to [0,1]. -/
+def greyPixel (v : Float) : (Nat × Nat × Nat) :=
+  let g := (max 0.0 (min 1.0 v) * 255.0).toUInt8.toNat
+  (g, g, g)
+
+def renderTrueColor (lut approxGrid : Array Float) (fit : EdgeFit) : IO Unit := do
+  -- Build edge-corrected grid
+  let approxEC : Array Float := Id.run do
+    let mut arr := Array.mkEmpty (128 * 128)
+    for i in [0:128] do
+      let roughness := gridFloats[i]!
+      for j in [0:128] do
+        let idx := i * 128 + j
+        let cosTheta := gridFloats[j]!
+        let y := max (approxGrid[idx]! +
+          fit.amplitude * edgeWeight fit.params roughness cosTheta) 0.0
+        arr := arr.push y
+    pure arr
+  let lutPixels   := lut.map        greyPixel
+  let rawPixels   := approxGrid.map greyPixel
+  let ecPixels    := approxEC.map   greyPixel
+  IO.FS.createDirAll "rendered"
+  writePpm "rendered/lut_true_color.ppm"         lutPixels  128 128
+  writePpm "rendered/approx_true_color.ppm"      rawPixels  128 128
+  writePpm "rendered/approx_ec_true_color.ppm"   ecPixels   128 128
+  IO.println "wrote rendered/lut_true_color.ppm"
+  IO.println "wrote rendered/approx_true_color.ppm"
+  IO.println "wrote rendered/approx_ec_true_color.ppm"
+  let hasConvert ← IO.Process.run { cmd := "which", args := #["convert"] } |>.toBaseIO
+  match hasConvert with
+  | .ok _ =>
+    let topng : List (String × String) := [
+      ("rendered/lut_true_color.ppm",       "rendered/lut_true_color.png"),
+      ("rendered/approx_true_color.ppm",    "rendered/approx_true_color.png"),
+      ("rendered/approx_ec_true_color.ppm", "rendered/approx_ec_true_color.png")]
+    for (src, dst) in topng do
+      let args : IO.Process.SpawnArgs := { cmd := "convert", args := #[src, dst] }
+      _ ← IO.Process.run args
+      IO.println s!"wrote {dst}"
+  | .error _ => pure ()
+
 def renderFalseColor (lut approxGrid : Array Float) (fit : EdgeFit) : IO Unit := do
   let approxEC : Array Float := Id.run do
     let mut arr := Array.mkEmpty (128 * 128)
@@ -319,6 +360,25 @@ def checkGroundTruth : IO Unit := do
   IO.println s!"edge-corrected max abs error: {fit.maxErr} at row {fit.maxIdx / 128}, col {fit.maxIdx % 128}"
   -- Render false-colour difference images
   renderFalseColor lut approxGrid fit
+  -- Render true-colour (greyscale) LUT and approximation images
+  renderTrueColor lut approxGrid fit
+  -- 4-panel montage: LUT | approx-EC | raw-err | ec-err
+  let hasConvert ← IO.Process.run { cmd := "which", args := #["convert"] } |>.toBaseIO
+  match hasConvert with
+  | .ok _ =>
+    let montageArgs : IO.Process.SpawnArgs := {
+      cmd := "convert",
+      args := #[
+        "rendered/lut_true_color.ppm",
+        "rendered/approx_ec_true_color.ppm",
+        "rendered/comparison_difference_false_color.ppm",
+        "rendered/edge_corrected_difference_false_color.ppm",
+        "+append",
+        "-scale", "512x128",
+        "rendered/lut_triptych_render.png"] }
+    _ ← IO.Process.run montageArgs
+    IO.println "wrote rendered/lut_triptych_render.png  (LUT | approx-EC | raw-err | ec-err)"
+  | .error _ => pure ()
 
 end SheenLutMobileCheck
 
