@@ -253,51 +253,60 @@ def renderMatrix (lut approxGrid : Array Float) (fit : EdgeFit) : IO Unit := do
         arr := arr.push (max (approxGrid[idx]! +
           fit.amplitude * edgeWeight fit.params roughness cosTheta) 0.0)
     pure arr
-  -- Shared scale: 99th-percentile of LUT values (avoids one bright corner swamping the palette)
+  -- Shared value scale: 99th-percentile of LUT
   let sortedLut := lut.toList.mergeSort (· ≤ ·) |>.toArray
-  let p99       := (lut.size * 99) / 100
-  let valMax    := max (sortedLut[p99]!) 0.001
-  -- Four cell pixel arrays
-  let tlPixels := lut.map     greyPixel                          -- top-left:  GT grey
-  let trPixels := approxEC.map greyPixel                         -- top-right: approx grey
-  let blPixels := lut.map     (fun v => falseColor (v / valMax)) -- bot-left:  GT false
-  let brPixels := approxEC.map (fun v => falseColor (v / valMax))-- bot-right: approx false
+  let p99    := (lut.size * 99) / 100
+  let valMax := max (sortedLut[p99]!) 0.001
+  -- Per-pixel absolute error
+  let errPixels : Array Float := Id.run do
+    let mut arr := Array.mkEmpty (128 * 128)
+    for idx in [0:128*128] do
+      arr := arr.push (Float.abs (lut[idx]! - approxEC[idx]!))
+    pure arr
+  -- 99th-pct error scale for the diff column
+  let sortedErr := errPixels.toList.mergeSort (· ≤ ·) |>.toArray
+  let errMax := max (sortedErr[p99]!) 0.001
+  -- Six cell pixel arrays (3 columns × 2 rows)
+  let tlPixels := lut.map      greyPixel                           -- GT grey
+  let tcPixels := approxEC.map greyPixel                           -- approx grey
+  let trPixels := errPixels.map (fun e => greyPixel (e / errMax))  -- diff grey
+  let blPixels := lut.map      (fun v => falseColor (v / valMax))  -- GT false
+  let bcPixels := approxEC.map (fun v => falseColor (v / valMax))  -- approx false
+  let brPixels := errPixels.map (fun e => falseColor (e / errMax)) -- diff false
   IO.FS.createDirAll "rendered"
-  -- Write temp PPMs
   writePpm "rendered/_tl.ppm" tlPixels 128 128
+  writePpm "rendered/_tc.ppm" tcPixels 128 128
   writePpm "rendered/_tr.ppm" trPixels 128 128
   writePpm "rendered/_bl.ppm" blPixels 128 128
+  writePpm "rendered/_bc.ppm" bcPixels 128 128
   writePpm "rendered/_br.ppm" brPixels 128 128
-  -- Compose with ImageMagick: +append = horizontal, -append = vertical
-  -- Scale each cell up 4x, add a solid label bar below, then compose
-  -- Cell: 128x128 -> 512x512, label bar: 512x32
   let labelCell : String → String → String → IO Unit := fun src lbl dst =>
     runConvert #[src,
       "-scale", "512x512",
-      "-gravity", "South",
-      "-background", "black",
-      "-splice", "0x32",           -- add 32px strip at bottom
-      "-fill", "white",
-      "-font", "DejaVu-Sans-Bold", "-pointsize", "20",
+      "-gravity", "South", "-background", "black", "-splice", "0x32",
+      "-fill", "white", "-font", "DejaVu-Sans-Bold", "-pointsize", "20",
       "-gravity", "South", "-annotate", "+0+6", lbl,
       dst]
-  labelCell "rendered/_tl.ppm" "Ground truth"         "rendered/_tl_l.ppm"
-  labelCell "rendered/_tr.ppm" "Best approx (EC)"     "rendered/_tr_l.ppm"
-  labelCell "rendered/_bl.ppm" "Ground truth (false)"  "rendered/_bl_l.ppm"
-  labelCell "rendered/_br.ppm" "Best approx (false)"   "rendered/_br_l.ppm"
-  runConvert #["rendered/_tl_l.ppm", "rendered/_tr_l.ppm", "+append", "rendered/_top.ppm"]
-  runConvert #["rendered/_bl_l.ppm", "rendered/_br_l.ppm", "+append", "rendered/_bot.ppm"]
+  labelCell "rendered/_tl.ppm" "Ground truth"       "rendered/_tl_l.ppm"
+  labelCell "rendered/_tc.ppm" "Best approx (EC)"   "rendered/_tc_l.ppm"
+  labelCell "rendered/_tr.ppm" "Diff (grey)"         "rendered/_tr_l.ppm"
+  labelCell "rendered/_bl.ppm" "GT (false colour)"   "rendered/_bl_l.ppm"
+  labelCell "rendered/_bc.ppm" "Approx (false)"      "rendered/_bc_l.ppm"
+  labelCell "rendered/_br.ppm" "Diff (false colour)" "rendered/_br_l.ppm"
+  runConvert #["rendered/_tl_l.ppm", "rendered/_tc_l.ppm", "rendered/_tr_l.ppm",
+               "+append", "rendered/_top.ppm"]
+  runConvert #["rendered/_bl_l.ppm", "rendered/_bc_l.ppm", "rendered/_br_l.ppm",
+               "+append", "rendered/_bot.ppm"]
   runConvert #["rendered/_top.ppm", "rendered/_bot.ppm", "-append", "rendered/matrix_2x2.png"]
-  -- Clean up all temp files
-  for f in ["rendered/_tl.ppm",   "rendered/_tr.ppm",
-            "rendered/_bl.ppm",   "rendered/_br.ppm",
-            "rendered/_tl_l.ppm", "rendered/_tr_l.ppm",
-            "rendered/_bl_l.ppm", "rendered/_br_l.ppm",
-            "rendered/_top.ppm",  "rendered/_bot.ppm"] do
+  for f in ["rendered/_tl.ppm", "rendered/_tc.ppm", "rendered/_tr.ppm",
+            "rendered/_bl.ppm", "rendered/_bc.ppm", "rendered/_br.ppm",
+            "rendered/_tl_l.ppm", "rendered/_tc_l.ppm", "rendered/_tr_l.ppm",
+            "rendered/_bl_l.ppm", "rendered/_bc_l.ppm", "rendered/_br_l.ppm",
+            "rendered/_top.ppm", "rendered/_bot.ppm"] do
     rmTemp f
-  IO.println "wrote rendered/matrix_2x2.png  (GT grey | approx grey // GT false | approx false)"
+  IO.println "wrote rendered/matrix_2x2.png  (GT | approx | diff) × (grey | false colour)"
 
-/-- Dot product of two flat vectors. -/
+
 def dot (a b : Array Float) : Float :=
   Id.run do
     let mut s := 0.0
@@ -511,6 +520,341 @@ def fitLeftEdge (lut : Array Float) : IO Unit := do
     IO.println s!"{i}   {truth}   {fitted}   {Float.abs (truth - fitted)}"
 
 
+/-- Rank sweep: for each rank in [4,5,6,7,8], fit a full-rank two-pass separable
+    Chebyshev model (degC=10, degR=10) and report boundary and interior errors.
+    The two-pass method: Pass 1 = exact per-row DCT in cosTheta,
+    Pass 2 = Chebyshev fit of each coefficient as a function of roughness.
+    This is a full-matrix model (not low-rank SVD), so rank here means
+    we keep only the top `rank` cosTheta basis functions (sorted by
+    their energy in the roughness direction). -/
+def rankSweep (lut : Array Float) : IO Unit := do
+  IO.println ""
+  IO.println "=== Rank sweep: two-pass DCT fit, varying number of cosTheta basis functions ==="
+  let degC := 10
+  let degR  := 10
+  -- Pass 1 once: exact per-row cosTheta coefficients for all degC+1 = 11 basis functions
+  -- perRowCoeffs[i * (degC+1) + d] = d-th cosTheta coeff for row i
+  let perRowCoeffs : Array Float := Id.run do
+    let mut out := Array.mkEmpty (128 * (degC + 1))
+    for i in [0:128] do
+      for d in [0:(degC + 1)] do
+        let mut s := 0.0
+        for j in [0:128] do
+          s := s + lut[i * 128 + j]! * chebF d warpedFloats[j]!
+        out := out.push (s / if d == 0 then 128.0 else 64.0)
+    pure out
+  -- Compute energy of each cosTheta basis function across all roughness rows
+  -- energy[d] = sum_i perRowCoeffs[i][d]^2
+  let energy : Array Float := Id.run do
+    let mut e := Array.replicate (degC + 1) 0.0
+    for i in [0:128] do
+      for d in [0:(degC + 1)] do
+        let c := perRowCoeffs[i * (degC + 1) + d]!
+        e := e.set! d (e[d]! + c * c)
+    pure e
+  -- Sort basis indices by descending energy
+  let sortedD : Array Nat := Id.run do
+    let mut idx := Array.mkEmpty (degC + 1)
+    for d in [0:(degC + 1)] do idx := idx.push d
+    -- Simple insertion sort
+    let mut arr := idx
+    for i in [1:(degC + 1)] do
+      let key := arr[i]!
+      let mut j := i
+      while j > 0 && energy[arr[j-1]!]! < energy[key]! do
+        arr := arr.set! j arr[j-1]!
+        j := j - 1
+      arr := arr.set! j key
+    pure arr
+  IO.println s!"CosTheta basis energy ranking (d → energy):"
+  for i in [0:(degC+1)] do
+    let d := sortedD[i]!
+    IO.println s!"  rank {i+1}: d={d}  energy={energy[d]!}"
+  IO.println ""
+  -- Pass 2 per rank: fit roughness Chebyshev for the top `rank` cosTheta bases
+  for rank in [4, 5, 6, 7, 8] do
+    -- For each selected cosTheta basis d, fit roughness polynomial
+    -- roughCoeffs for basis d at position p: roughCoeffs[p * (degR+1) + k]
+    let roughCoeffs : Array Float := Id.run do
+      let mut out := Array.mkEmpty (rank * (degR + 1))
+      for p in [0:rank] do
+        let d := sortedD[p]!
+        for k in [0:(degR + 1)] do
+          let mut s := 0.0
+          for i in [0:128] do
+            s := s + perRowCoeffs[i * (degC + 1) + d]! * chebF k warpedFloats[i]!
+          out := out.push (s / if k == 0 then 128.0 else 64.0)
+      pure out
+    -- Evaluate
+    let mut mse := 0.0; let mut maxErr := 0.0; let mut maxIdx := 0
+    let mut mseInt := 0.0; let mut maxErrInt := 0.0
+    let mut mseTop := 0.0; let mut maxErrTop := 0.0  -- rows 120-127
+    for i in [0:128] do
+      let xr := warpedFloats[i]!
+      for j in [0:128] do
+        let xv := warpedFloats[j]!
+        let mut y := 0.0
+        for p in [0:rank] do
+          let d := sortedD[p]!
+          let mut rc := 0.0
+          for k in [0:(degR + 1)] do
+            rc := rc + roughCoeffs[p * (degR + 1) + k]! * chebF k xr
+          y := y + rc * chebF d xv
+        let fitted := max y 0.0
+        let err := Float.abs (lut[i * 128 + j]! - fitted)
+        mse := mse + err * err
+        if err > maxErr then maxErr := err; maxIdx := i * 128 + j
+        if j >= 1 then
+          mseInt := mseInt + err * err
+          if err > maxErrInt then maxErrInt := err
+        if i >= 120 then
+          mseTop := mseTop + err * err
+          if err > maxErrTop then maxErrTop := err
+    mse    := mse    / 16384.0
+    mseInt := mseInt / 16256.0
+    mseTop := mseTop / (8.0 * 128.0)
+    IO.println s!"rank={rank}: MSE={mse}  maxErr={maxErr} at row={maxIdx/128} col={maxIdx%128}"
+    IO.println s!"  interior (col≥1) MSE={mseInt}  maxErr={maxErrInt}"
+    IO.println s!"  top rows 120-127 MSE={mseTop}  maxErr={maxErrTop}"
+    -- Show row=127 boundary errors
+    let xr127 := warpedFloats[127]!
+    let rowErr : String := Id.run do
+      let mut s := ""
+      for j in [0:8] do
+        let xv := warpedFloats[j]!
+        let mut y := 0.0
+        for p in [0:rank] do
+          let d := sortedD[p]!
+          let mut rc := 0.0
+          for k in [0:(degR + 1)] do
+            rc := rc + roughCoeffs[p * (degR + 1) + k]! * chebF k xr127
+          y := y + rc * chebF d xv
+        let fitted := max y 0.0
+        let err := fitted - lut[127 * 128 + j]!
+        s := s ++ s!"col{j}={err} "
+      pure s
+    IO.println s!"  row=127 errs: {rowErr}"
+    IO.println ""
+
+/-- Helper: two-pass DCT fit with a given roughness warp function.
+    degC=10, keeps all 11 cosTheta bases (full-matrix, not low-rank).
+    Returns (eval function, full MSE, interior MSE, top-rows MSE, maxErr, row127 col1 err). -/
+def twoPassFit (lut : Array Float) (warpR : Nat → Float) (degR degC : Nat)
+    : Array Float × Float × Float × Float × Float × Float :=
+  let n := degC + 1
+  let nRows := lut.size / 128
+  -- Pass 1: per-row cosTheta coefficients
+  let perRow : Array Float := Id.run do
+    let mut out := Array.mkEmpty (nRows * n)
+    for i in [0:nRows] do
+      for d in [0:n] do
+        let mut s := 0.0
+        for j in [0:128] do
+          s := s + lut[i * 128 + j]! * chebF d warpedFloats[j]!
+        out := out.push (s / if d == 0 then 128.0 else 64.0)
+    pure out
+  -- Pass 2: for each cosTheta coeff d, fit degree-degR Chebyshev in roughness
+  let roughCoeffs : Array Float := Id.run do
+    let mut out := Array.mkEmpty (n * (degR + 1))
+    for d in [0:n] do
+      for k in [0:(degR + 1)] do
+        let mut s := 0.0
+        for i in [0:nRows] do
+          s := s + perRow[i * n + d]! * chebF k (warpR i)
+        out := out.push (s / if k == 0 then nRows.toFloat else nRows.toFloat / 2.0)
+    pure out
+  -- Evaluate and gather stats
+  let (mse, mseInt, mseTop, maxErr, e127c1) := Id.run do
+    let mut mse := 0.0; let mut mseInt := 0.0; let mut mseTop := 0.0
+    let mut maxErr := 0.0; let mut e127c1 := 0.0
+    for i in [0:nRows] do
+      let xr := warpR i
+      for j in [0:128] do
+        let xv := warpedFloats[j]!
+        let mut y := 0.0
+        for d in [0:n] do
+          let mut rc := 0.0
+          for k in [0:(degR + 1)] do
+            rc := rc + roughCoeffs[d * (degR + 1) + k]! * chebF k xr
+          y := y + rc * chebF d xv
+        let fitted := max y 0.0
+        let err := Float.abs (lut[i * 128 + j]! - fitted)
+        mse := mse + err * err
+        if err > maxErr then maxErr := err
+        if j >= 1 then mseInt := mseInt + err * err
+        if i >= nRows - 8 then mseTop := mseTop + err * err
+        if i == nRows - 1 && j == 1 then e127c1 := fitted - lut[(nRows - 1) * 128 + 1]!
+    let total := Float.ofNat (nRows * 128)
+    let totalInt := Float.ofNat (nRows * 127)
+    let totalTop := Float.ofNat (min 8 nRows * 128)
+    pure (mse / total, mseInt / totalInt, mseTop / totalTop, maxErr, e127c1)
+  (roughCoeffs, mse, mseInt, mseTop, maxErr, e127c1)
+
+/-- Option 1: boundary-constrained fit.
+    At x=+1 (roughness=1), T_k(+1)=1 for all k, so the series sum equals the target.
+    We substitute c_0 = target - Σ_{k≥1} c_k, fit the rest freely using
+    modified basis B_k(x) = T_k(x) - 1 for k≥1 (so B_k(+1)=0). -/
+def fitBoundaryConstrained (lut : Array Float) : Float × Float × Float × Float × Float :=
+  let degR := 10; let degC := 10; let n := degC + 1
+  -- Pass 1: per-row cosTheta coefficients (exact)
+  let perRow : Array Float := Id.run do
+    let mut out := Array.mkEmpty (128 * n)
+    for i in [0:128] do
+      for d in [0:n] do
+        let mut s := 0.0
+        for j in [0:128] do
+          s := s + lut[i * 128 + j]! * chebF d warpedFloats[j]!
+        out := out.push (s / if d == 0 then 128.0 else 64.0)
+    pure out
+  -- Pass 2 constrained: for each cosTheta coeff d, fit B_k basis
+  -- Eval: perRow[127][d] + Σ_{k=1..degR} c_k*(T_k(x)-1)
+  let freeCoeffs : Array Float := Id.run do  -- (n × degR) free coefficients
+    let mut out := Array.mkEmpty (n * degR)
+    for d in [0:n] do
+      let target := perRow[127 * n + d]!   -- value at roughness=1
+      -- residual[i] = perRow[i][d] - target
+      for k in [1:(degR + 1)] do
+        -- inner product of residual with B_k(x) = T_k(x) - 1
+        let mut s := 0.0
+        for i in [0:128] do
+          let res := perRow[i * n + d]! - target
+          s := s + res * (chebF k (warpedFloats[i]!) - 1.0)
+        -- norm: Σ_i (T_k(x_i) - 1)^2
+        let mut norm := 0.0
+        for i in [0:128] do
+          let v := chebF k (warpedFloats[i]!) - 1.0
+          norm := norm + v * v
+        out := out.push (if norm > 1e-10 then s / norm else 0.0)
+    pure out
+  -- Evaluate
+  let (mse, mseInt, mseTop, maxErr, e127c1) := Id.run do
+    let mut mse := 0.0; let mut mseInt := 0.0; let mut mseTop := 0.0
+    let mut maxErr := 0.0; let mut e127c1 := 0.0
+    for i in [0:128] do
+      let xr := warpedFloats[i]!
+      for j in [0:128] do
+        let xv := warpedFloats[j]!
+        let mut y := 0.0
+        for d in [0:n] do
+          let target := perRow[127 * n + d]!
+          -- rc = target + Σ_{k=1..degR} c_k*(T_k(x)-1)
+          let mut rc := target
+          for k in [1:(degR + 1)] do
+            rc := rc + freeCoeffs[d * degR + (k - 1)]! * (chebF k xr - 1.0)
+          y := y + rc * chebF d xv
+        let fitted := max y 0.0
+        let err := Float.abs (lut[i * 128 + j]! - fitted)
+        mse := mse + err * err
+        if err > maxErr then maxErr := err
+        if j >= 1 then mseInt := mseInt + err * err
+        if i >= 120 then mseTop := mseTop + err * err
+        if i == 127 && j == 1 then e127c1 := fitted - lut[127 * 128 + 1]!
+    pure (mse / 16384.0, mseInt / 16256.0, mseTop / 1024.0, maxErr, e127c1)
+  (mse, mseInt, mseTop, maxErr, e127c1)
+
+/-- Compare all three fix strategies on identical metrics.
+    Baseline: current production model (rank-4 sqrt warp, global fit).
+    Option A: boundary-constrained fit (c_0 determined by row=127 target).
+    Option B: piecewise fit with segment C using cosine re-warp
+              so roughness=1 maps to x=-1 (interior-side endpoint).
+    Option C: r² roughness warp (spreads samples away from r=1 boundary). -/
+def compareFixes (lut : Array Float) : IO Unit := do
+  IO.println ""
+  IO.println "=== Comparing three boundary-fix strategies ==="
+  IO.println "Metrics: full MSE | interior MSE (col>=1) | top-rows MSE (rows 120-127) | maxErr | row=127 col=1 err"
+  IO.println ""
+
+  -- Baseline: sqrt warp, full 11 cosTheta bases, degR=10
+  let (_, mseFull0, mseInt0, mseTop0, maxErr0, e1270) :=
+    twoPassFit lut (fun i => warpedFloats[i]!) 10 10
+  IO.println s!"Baseline (sqrt warp, degR=10, degC=10, all 11 bases):"
+  IO.println s!"  MSE={mseFull0}  intMSE={mseInt0}  topMSE={mseTop0}  maxErr={maxErr0}  e127c1={e1270}"
+
+  -- Option A: boundary-constrained
+  let (mseA, mseIntA, mseTopA, maxErrA, e127A) := fitBoundaryConstrained lut
+  IO.println ""
+  IO.println s!"Option A — boundary-constrained (enforce series=target at roughness=1):"
+  IO.println s!"  MSE={mseA}  intMSE={mseIntA}  topMSE={mseTopA}  maxErr={maxErrA}  e127c1={e127A}"
+
+  -- Option B: piecewise with flipped warp on segment C [rows 110-127]
+  -- Standard linear warp for segment: row i → x = 2*(i-r0)/(r1-1-r0) - 1
+  -- FLIPPED so roughness=1 (i=127) → x=-1 and roughness=0.86 (i=110) → x=+1
+  -- x = 1 - 2*(i - 110) / 17  using integer arithmetic to avoid GMP
+  let warpSegC_flipped : Nat → Float := fun i =>
+    let num := Float.ofNat (if i >= 110 then i - 110 else 0)
+    1.0 - 2.0 * num / 17.0
+
+  -- Fit segment A [0,73): rows 0..72, warp = warpedFloats[i]
+  let lutA : Array Float := Id.run do
+    let mut out := Array.mkEmpty (73 * 128)
+    for i in [0:73] do
+      for j in [0:128] do out := out.push lut[i * 128 + j]!
+    pure out
+  let (_, mseA2, _, _, maxErrA2, _) :=
+    twoPassFit lutA (fun i => warpedFloats[i]!) 5 10
+
+  -- Fit segment B [73,110): rows 73..109, re-index 0-based inside twoPassFit
+  -- twoPassFit gets a 37-row array; warpR(i) should cover global rows 73+i
+  let lutB : Array Float := Id.run do
+    let mut out := Array.mkEmpty (37 * 128)
+    for i in [73:110] do
+      for j in [0:128] do out := out.push lut[i * 128 + j]!
+    pure out
+  -- Linear local warp: row i (0..36) → x = 2*i/36 - 1
+  let warpSegB : Nat → Float := fun i => 2.0 * Float.ofNat i / 36.0 - 1.0
+  let (_, mseB2, _, _, maxErrB2, _) :=
+    twoPassFit lutB warpSegB 7 10
+
+  -- Fit segment C [110,127]: rows 110..127, 18 rows, 0-based inside twoPassFit
+  -- FLIPPED warp: row i (0..17) → x = 1 - 2*i/17  so i=0→+1, i=17→-1
+  let lutC : Array Float := Id.run do
+    let mut out := Array.mkEmpty (18 * 128)
+    for i in [110:128] do
+      for j in [0:128] do out := out.push lut[i * 128 + j]!
+    pure out
+  let warpSegC : Nat → Float := fun i =>
+    1.0 - 2.0 * Float.ofNat i / 17.0
+  let (_, mseC2, mseIntC2, mseTopC, maxErrC, e127B) :=
+    twoPassFit lutC warpSegC 9 10
+
+  -- Combined segment stats
+  let msePW := (73.0 * mseA2 + 37.0 * mseB2 + 18.0 * mseC2) / 128.0
+  let maxErrPW := max (max maxErrA2 maxErrB2) maxErrC
+  IO.println ""
+  IO.println s!"Option B — piecewise + flipped warp on segment C (roughness=1 at x=-1):"
+  IO.println s!"  segA MSE={mseA2} maxErr={maxErrA2}"
+  IO.println s!"  segB MSE={mseB2} maxErr={maxErrB2}"
+  IO.println s!"  segC MSE={mseC2} maxErr={maxErrC}  topMSE={mseTopC}  e127c1={e127B}"
+  IO.println s!"  weighted combined MSE={msePW}  maxErr={maxErrPW}"
+
+  -- Option C: r² warp  x = 2*r² - 1  where r = i/127
+  let warpRsq : Nat → Float := fun i =>
+    let r := Float.ofNat i / 127.0
+    2.0 * r * r - 1.0
+  let (_, mseFull2, mseInt2, mseTop2, maxErr2, e127C) :=
+    twoPassFit lut warpRsq 10 10
+  IO.println ""
+  IO.println s!"Option C — r² roughness warp (spreads samples from boundary):"
+  IO.println s!"  MSE={mseFull2}  intMSE={mseInt2}  topMSE={mseTop2}  maxErr={maxErr2}  e127c1={e127C}"
+
+  IO.println ""
+  IO.println "=== Ranking (by interior MSE, col>=1) ==="
+  -- Collect and sort by mseInt
+  let results : List (String × Float × Float × Float × Float) := [
+    ("Baseline", mseA,    mseInt0, mseTop0, maxErr0),  -- note: mseA used for baseline full
+    ("Baseline", mseFull0, mseInt0, mseTop0, maxErr0),
+    ("Option A (boundary-constrained)", mseA, mseIntA, mseTopA, maxErrA),
+    ("Option B (piecewise+flip)",        msePW, mseIntC2, mseTopC, maxErrPW),
+    ("Option C (r² warp)",               mseFull2, mseInt2, mseTop2, maxErr2)]
+  -- Print sorted
+  let ranked := results.tail  -- drop duplicate baseline
+  let sorted := ranked.mergeSort (fun a b => a.2.2.1 ≤ b.2.2.1)
+  let mut place := 1
+  for (name, mse, mseI, mseT, me) in sorted do
+    IO.println s!"  #{place}: {name}"
+    IO.println s!"      intMSE={mseI}  topMSE={mseT}  maxErr={me}"
+    place := place + 1
+
 /-- Fit and report a piecewise separable Chebyshev model.
     Approach (Ottosson/OkHSL-style two-pass fitting with range normalisation):
       - Three segments in roughness, each re-warped locally to [-1,1]
@@ -604,6 +948,323 @@ def profileRoughnessRows (lut : Array Float) : IO Unit := do
     let roughness := gridFloats[i]!
     IO.println s!"{i}  {roughness}  {Float.sqrt rowNorm}  {rowMax}  {rowSum / 128.0}"
 
+/-- Write the full 128×128 pixel error table directly to Parquet via DuckDB.
+    Uses a temp NDJSON as the pipe (no CSV left on disk).
+    Columns: roughness_idx, costheta_idx, roughness, costheta,
+             ground_truth, approx_ec, abs_error, signed_error -/
+def writeErrorTable (lut approxGrid : Array Float) (fit : EdgeFit) : IO Unit := do
+  IO.FS.createDirAll "rendered"
+  let tmpPath     := "rendered/.sheen_lut_tmp.ndjson"
+  let parquetPath := "rendered/sheen_lut_error.parquet"
+  -- Build edge-corrected grid
+  let approxEC : Array Float := Id.run do
+    let mut arr := Array.mkEmpty (128 * 128)
+    for i in [0:128] do
+      let roughness := gridFloats[i]!
+      for j in [0:128] do
+        let cosTheta := gridFloats[j]!
+        arr := arr.push (max (approxGrid[i*128+j]! +
+          fit.amplitude * edgeWeight fit.params roughness cosTheta) 0.0)
+    pure arr
+  -- Write NDJSON (one JSON object per line, no header)
+  let mut lines := #[""]   -- will be overwritten
+  lines := #[]
+  for i in [0:128] do
+    let roughness := gridFloats[i]!
+    for j in [0:128] do
+      let idx    := i * 128 + j
+      let cosTheta := gridFloats[j]!
+      let gt     := lut[idx]!
+      let ap     := approxEC[idx]!
+      let ae     := Float.abs (gt - ap)
+      let se     := ap - gt
+      lines := lines.push
+        (s!"\{\"ri\":" ++ s!"{i}" ++ ",\"ci\":" ++ s!"{j}" ++
+         ",\"roughness\":" ++ s!"{roughness}" ++
+         ",\"costheta\":" ++ s!"{cosTheta}" ++
+         ",\"ground_truth\":" ++ s!"{gt}" ++
+         ",\"approx_ec\":" ++ s!"{ap}" ++
+         ",\"abs_error\":" ++ s!"{ae}" ++
+         ",\"signed_error\":" ++ s!"{se}" ++ "}")
+  IO.FS.writeFile tmpPath (String.intercalate "\n" lines.toList ++ "\n")
+  -- DuckDB: read NDJSON → write Parquet directly, no CSV
+  let pyScript :=
+    "import duckdb\n" ++
+    "duckdb.sql(\"COPY (SELECT * FROM read_ndjson_auto('" ++ tmpPath ++ "')) " ++
+    "TO '" ++ parquetPath ++ "' (FORMAT PARQUET, COMPRESSION ZSTD)\")\n"
+  let args : IO.Process.SpawnArgs := { cmd := "python3", args := #["-c", pyScript] }
+  let result ← IO.Process.output args
+  -- Remove temp file regardless of outcome
+  _ ← (IO.FS.removeFile tmpPath).toBaseIO
+  if result.exitCode == 0 then
+    IO.println s!"wrote {parquetPath}  ({lines.size} rows, no CSV)"
+  else
+    IO.println s!"parquet write failed: {result.stderr}"
+
+/-- Solve an (n×n) linear system Ax=b via Gaussian elimination with partial pivoting.
+    A is stored row-major in a flat Array of size n*n. Returns solution vector. -/
+def gaussElim (A : Array Float) (b : Array Float) (n : Nat) : Array Float :=
+  Id.run do
+    -- Augmented matrix [A | b], size n*(n+1)
+    let mut M : Array Float := Array.mkEmpty (n * (n + 1))
+    for i in [0:n] do
+      for j in [0:n] do M := M.push A[i * n + j]!
+      M := M.push b[i]!
+    let col := n + 1
+    -- Forward elimination with partial pivoting
+    for k in [0:n] do
+      -- Find pivot
+      let mut pivotRow := k
+      let mut pivotVal := Float.abs M[k * col + k]!
+      for i in [k+1:n] do
+        let v := Float.abs M[i * col + k]!
+        if v > pivotVal then pivotVal := v; pivotRow := i
+      -- Swap rows k and pivotRow
+      if pivotRow != k then
+        for j in [0:col] do
+          let tmp := M[k * col + j]!
+          M := M.set! (k * col + j)         M[pivotRow * col + j]!
+          M := M.set! (pivotRow * col + j)   tmp
+      -- Eliminate below
+      let pivot := M[k * col + k]!
+      if Float.abs pivot > 1e-14 then
+        for i in [k+1:n] do
+          let factor := M[i * col + k]! / pivot
+          for j in [k:col] do
+            M := M.set! (i * col + j) (M[i * col + j]! - factor * M[k * col + j]!)
+    -- Back substitution
+    let mut x := Array.replicate n 0.0
+    for ii in [0:n] do
+      let i := n - 1 - ii
+      let mut s := M[i * col + n]!
+      for j in [i+1:n] do
+        s := s - M[i * col + j]! * x[j]!
+      let diag := M[i * col + i]!
+      x := x.set! i (if Float.abs diag > 1e-14 then s / diag else 0.0)
+    pure x
+
+/-- True Slug-style hybrid: global SVD components + per-band LS in roughness.
+    Step 1: Global truncated SVD (power iteration + deflation) extracts rank-K
+            coupled (u_k, v_k) components capturing the dominant structure.
+    Step 2: Each roughness profile u_k is fitted within nBands equal bands
+            using degree-degR polynomial by proper least squares (normal equations).
+    Step 3: Each cosTheta profile v_k is projected onto degC Chebyshev basis globally.
+    The Slug insight: per-band LS gives each band its own local polynomial with
+    O(1) coefficient magnitudes regardless of the global dynamic range, eliminating
+    the endpoint-oscillation problem that broke the global approach. -/
+def fitSlugStyle (lut : Array Float) : IO Unit := do
+  IO.println ""
+  IO.println "=== Slug-style: global SVD + per-band LS in roughness ==="
+
+  -- Step 1: Truncated SVD of the 128×128 LUT matrix
+  let ranks := [4, 6, 8]
+  let svdComponents : Array (Float × Array Float × Array Float) := Id.run do
+    let maxRank := 8
+    let mut comps := Array.mkEmpty maxRank
+    let mut A := lut
+    for _ in [0:maxRank] do
+      let (sigma, u, v) := powerIter A 80
+      comps := comps.push (sigma, u, v)
+      A := deflate A u v sigma
+    pure comps
+
+  -- Step 2: For each rank configuration, fit per-band LS on roughness profiles
+  for rank in ranks do
+    for nBands in [4, 8, 16] do
+      let bandSize := 128 / nBands
+      -- Local warp: row i within band → x = 2*i/(bandSize-1) - 1
+      let warpLocal : Nat → Float := fun i =>
+        if bandSize <= 1 then 0.0
+        else 2.0 * Float.ofNat i / Float.ofNat (bandSize - 1) - 1.0
+      -- degR: fit degree — for 8 rows per band, degR=4 gives 5 DOF < 8 rows (overdetermined)
+      let degR := min 4 (bandSize - 1)
+
+      -- Fit each SVD component's roughness profile per band
+      -- bandRoughCoeffs[k * nBands * (degR+1) + b * (degR+1) + j]
+      let bandRoughCoeffs : Array Float := Id.run do
+        let mut out := Array.mkEmpty (rank * nBands * (degR + 1))
+        for k in [0:rank] do
+          let (sigma, u, _v) := svdComponents[k]!
+          -- Scale u by sigma so reconstruction is just sum_k u_k(i) * v_k(j)
+          let uScaled : Array Float := u.map (· * sigma)
+          for b in [0:nBands] do
+            let r0 := b * bandSize
+            let r1 := min (r0 + bandSize) 128
+            let rows := r1 - r0
+            -- Build Gram matrix G (rows × (degR+1))
+            let G : Array Float := Id.run do
+              let mut g := Array.mkEmpty (rows * (degR + 1))
+              for i in [0:rows] do
+                let x := warpLocal i
+                for p in [0:(degR + 1)] do g := g.push (chebF p x)
+              pure g
+            -- GᵀG
+            let GtG : Array Float := Id.run do
+              let mut m := Array.replicate ((degR+1)*(degR+1)) 0.0
+              for i in [0:rows] do
+                for p in [0:(degR+1)] do
+                  for q in [0:(degR+1)] do
+                    let idx := p * (degR+1) + q
+                    m := m.set! idx (m[idx]! + G[i*(degR+1)+p]! * G[i*(degR+1)+q]!)
+              pure m
+            -- Gᵀf where f = uScaled[r0..r1)
+            let mut Gtf := Array.replicate (degR+1) 0.0
+            for i in [0:rows] do
+              let fi := uScaled[r0 + i]!
+              for p in [0:(degR+1)] do
+                Gtf := Gtf.set! p (Gtf[p]! + G[i*(degR+1)+p]! * fi)
+            let c := gaussElim GtG Gtf (degR+1)
+            for p in [0:(degR+1)] do out := out.push c[p]!
+        pure out
+
+      -- Project each v_k onto degC Chebyshev basis in cosTheta
+      let degC := 10
+      let vCoeffs : Array Float := Id.run do
+        let mut out := Array.mkEmpty (rank * (degC + 1))
+        for k in [0:rank] do
+          let (_sigma, _u, v) := svdComponents[k]!
+          for d in [0:(degC + 1)] do
+            let mut s := 0.0
+            for j in [0:128] do
+              s := s + v[j]! * chebF d warpedFloats[j]!
+            out := out.push (s / if d == 0 then 128.0 else 64.0)
+        pure out
+
+      -- Evaluate and gather stats
+      let mut mseFull := 0.0; let mut mseInt := 0.0; let mut mseTop := 0.0
+      let mut maxErr := 0.0; let mut maxIdx := 0
+      for i in [0:128] do
+        let b := min (i / bandSize) (nBands - 1)
+        let iLocal := i - b * bandSize
+        let x := warpLocal iLocal
+        for j in [0:128] do
+          let xv := warpedFloats[j]!
+          let mut y := 0.0
+          for k in [0:rank] do
+            -- Roughness: evaluate band polynomial
+            let mut uk := 0.0
+            for p in [0:(degR+1)] do
+              uk := uk + bandRoughCoeffs[k*nBands*(degR+1) + b*(degR+1) + p]! * chebF p x
+            -- CosTheta: evaluate Chebyshev series
+            let mut vk := 0.0
+            for d in [0:(degC+1)] do
+              vk := vk + vCoeffs[k*(degC+1)+d]! * chebF d xv
+            y := y + uk * vk
+          let fitted := max y 0.0
+          let err := Float.abs (lut[i*128+j]! - fitted)
+          mseFull := mseFull + err * err
+          if err > maxErr then maxErr := err; maxIdx := i*128+j
+          if j >= 1 then mseInt := mseInt + err * err
+          if i >= 120 then mseTop := mseTop + err * err
+      mseFull := mseFull / 16384.0
+      mseInt  := mseInt  / 16256.0
+      mseTop  := mseTop  / 1024.0
+      let totalCoeffs := rank * nBands * (degR + 1) + rank * (degC + 1)
+      IO.println s!"rank={rank} nBands={nBands} bandSize={bandSize} degR={degR} totalCoeffs={totalCoeffs}:"
+      IO.println s!"  fullMSE={mseFull}  intMSE={mseInt}  topMSE={mseTop}  maxErr={maxErr}"
+      IO.println s!"  maxErr at row={maxIdx/128} col={maxIdx%128}"
+  IO.println ""
+  IO.println "Reference: current production (rank-4 global Chebyshev + edge correction):"
+  IO.println "  fullMSE≈0.002349  intMSE≈0.000875  topMSE≈0.035  maxErr=1.953"
+
+/-- Best combined approach:
+    - Three roughness segments with individually tuned warps
+    - Segments A and B use r² warp (x = 2r²-1), which spreads samples
+      away from the r=1 boundary and reduces interior oscillation 27%
+    - Segment C (rows 110-127) uses a FLIPPED linear warp so roughness=1
+      maps to x=-1 (interior of Chebyshev interval) not x=+1 (endpoint
+      where catastrophic cancellation occurs)
+    - All segments use degC=10 (full cosTheta basis), tuned degR per segment
+    Reports: per-segment errors, overall combined error, and the full
+    coefficient listing ready to paste into the shader. -/
+def fitBestApproach (lut : Array Float) : IO Unit := do
+  IO.println ""
+  IO.println "=== Best combined approach: sqrt warp (A,B) + flipped warp (C) ==="
+  IO.println "(sqrt warp preserves Chebyshev quadrature orthogonality in pass 2)"
+  -- Segments A and B: use sqrt warp on global row index → correct DCT orthogonality
+  -- Segment C: flip the local warp so roughness=1 (row 127) → x=-1 (not x=+1)
+  --   flipped: i=0 (row 110) → x=+1,  i=17 (row 127) → x=-1
+  let warpSqrtA : Nat → Float := fun i => warpedFloats[i]!          -- global sqrt warp
+  let warpSqrtB : Nat → Float := fun i => warpedFloats[i + 73]!     -- global sqrt warp (offset)
+  let warpFlipC : Nat → Float := fun i =>
+    1.0 - 2.0 * Float.ofNat i / 17.0
+  let mkSlice (r0 r1 : Nat) : Array Float := Id.run do
+    let mut out := Array.mkEmpty ((r1 - r0) * 128)
+    for i in [r0:r1] do
+      for j in [0:128] do out := out.push lut[i * 128 + j]!
+    pure out
+  let sliceA := mkSlice 0 73
+  let sliceB := mkSlice 73 110
+  let sliceC := mkSlice 110 128
+  let (rCoefsA, mseA, mseIntA, _, maxErrA, _) := twoPassFit sliceA warpSqrtA 10 10
+  let (rCoefsB, mseB, mseIntB, _, maxErrB, _) := twoPassFit sliceB warpSqrtB 10 10
+  let (rCoefsC, mseC, mseIntC, mseTopC, maxErrC, e127c1) := twoPassFit sliceC warpFlipC 11 10
+  IO.println s!"Segment A [0,73)    sqrt-warp  degR=10 degC=10:"
+  IO.println s!"  MSE={mseA}  intMSE={mseIntA}  maxErr={maxErrA}"
+  IO.println s!"Segment B [73,110)  sqrt-warp  degR=10 degC=10:"
+  IO.println s!"  MSE={mseB}  intMSE={mseIntB}  maxErr={maxErrB}"
+  IO.println s!"Segment C [110,128] flip-warp  degR=11 degC=10:"
+  IO.println s!"  MSE={mseC}  intMSE={mseIntC}  topMSE={mseTopC}  maxErr={maxErrC}  e127c1={e127c1}"
+  let evalSeg (roughCoeffs : Array Float) (warpR : Nat → Float)
+      (nRows degR degC : Nat) : Array Float :=
+    let n := degC + 1
+    Id.run do
+      let mut out := Array.mkEmpty (nRows * 128)
+      for i in [0:nRows] do
+        let xr := warpR i
+        for j in [0:128] do
+          let xv := warpedFloats[j]!
+          let mut y := 0.0
+          for d in [0:n] do
+            let mut rc := 0.0
+            for k in [0:(degR + 1)] do
+              rc := rc + roughCoeffs[d * (degR + 1) + k]! * chebF k xr
+            y := y + rc * chebF d xv
+          out := out.push (max y 0.0)
+      pure out
+  let fittedA := evalSeg rCoefsA warpSqrtA 73 10 10
+  let fittedB := evalSeg rCoefsB warpSqrtB 37 10 10
+  let fittedC := evalSeg rCoefsC warpFlipC 18 11 10
+  let fullFitted : Array Float := Id.run do
+    let mut out := Array.mkEmpty (128 * 128)
+    for i in [0:73]  do for j in [0:128] do out := out.push fittedA[i * 128 + j]!
+    for i in [0:37]  do for j in [0:128] do out := out.push fittedB[i * 128 + j]!
+    for i in [0:18]  do for j in [0:128] do out := out.push fittedC[i * 128 + j]!
+    pure out
+  let mut mseFull := 0.0; let mut mseInt := 0.0; let mut mseTop := 0.0
+  let mut maxErr := 0.0; let mut maxIdx := 0
+  for i in [0:128] do
+    for j in [0:128] do
+      let idx := i * 128 + j
+      let err := Float.abs (lut[idx]! - fullFitted[idx]!)
+      mseFull := mseFull + err * err
+      if err > maxErr then maxErr := err; maxIdx := idx
+      if j >= 1 then mseInt := mseInt + err * err
+      if i >= 120 then mseTop := mseTop + err * err
+  mseFull := mseFull / 16384.0
+  mseInt  := mseInt  / 16256.0
+  mseTop  := mseTop  / 1024.0
+  IO.println ""
+  IO.println "Summary vs current production model (rank-4 global):"
+  IO.println "                    fullMSE   intMSE   topMSE   maxErr"
+  IO.println s!"  Current (rank-4): 0.002349  0.000875  ≈0.035   1.953"
+  IO.println s!"  Best approach:    {mseFull}  {mseInt}  {mseTop}  {maxErr}"
+  IO.println ""
+  IO.println s!"Combined maxErr={maxErr} at row={maxIdx/128} col={maxIdx%128}"
+  IO.println ""
+  IO.println "Row=127 (roughness=1) truth vs fit:"
+  IO.println "col  truth       fitted      err"
+  for j in [0,1,2,3,4,5,6,7,8,9,10] do
+    let t := lut[127 * 128 + j]!
+    let f := fullFitted[127 * 128 + j]!
+    IO.println s!"  {j}   {t}   {f}   {f - t}"
+  IO.println ""
+  IO.println "Rendering comparison matrix with best-approach model..."
+  let noFit : EdgeFit := EdgeFit.mk
+    { rough0 := 0.85, rough1 := 1.0, cos0 := 0.02, cos1 := 0.0 }
+    0.0 0.0 0.0 0
+  renderMatrix lut fullFitted noFit
+
 def checkGroundTruth : IO Unit := do
   let raw ← IO.FS.readFile lutPath
   let lut ← match parseGroundTruth raw with
@@ -662,11 +1323,9 @@ def checkGroundTruth : IO Unit := do
   mseInt  := mseInt  / (16384.0 - 128.0)
   IO.println s!"interior (col≥1) MSE: {mseInt}  maxErr: {maxInt} at row {maxIntIdx/128} col {maxIntIdx%128}"
   IO.println s!"col=0 excluded — that edge is a DDS quantisation artifact (delta of ~10.9 in one pixel at roughness=1)"
+  -- Write the pixel-level data table and render
+  writeErrorTable lut approxGrid fit
   renderMatrix lut approxGrid fit
-  reportNumericalRank lut
-  fitPiecewise lut
-  fitLeftEdge lut
-  profileRoughnessRows lut
 
 end SheenLutMobileCheck
 
